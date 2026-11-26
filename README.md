@@ -1,8 +1,8 @@
 # Claude Model Router
 
-[![npm](https://img.shields.io/npm/v/claude-model-router.svg)](https://www.npmjs.com/package/claude-model-router)
-[![node](https://img.shields.io/node/v/claude-model-router.svg)](https://nodejs.org)
-[![license](https://img.shields.io/npm/l/claude-model-router.svg)](LICENSE)
+[![npm](https://img.shields.io/npm/v/@siamakrostami/claude-model-router.svg)](https://www.npmjs.com/package/@siamakrostami/claude-model-router)
+[![node](https://img.shields.io/node/v/@siamakrostami/claude-model-router.svg)](https://nodejs.org)
+[![license](https://img.shields.io/npm/l/@siamakrostami/claude-model-router.svg)](LICENSE)
 
 Per-turn model routing for Claude Code. You type your request as usual, and Claude Model Router
 sends that turn to the model and effort that suit it:
@@ -39,8 +39,8 @@ Claude Model Router is a Claude Code mod:
 ## Install
 
 ```bash
-npm install -g claude-model-router
-claude plugin marketplace add "$(npm root -g)/claude-model-router"
+npm install -g @siamakrostami/claude-model-router
+claude plugin marketplace add "$(npm root -g)/@siamakrostami/claude-model-router"
 claude plugin install model-router@model-router
 ```
 
