@@ -114,7 +114,7 @@ test('no .tmp left after write', () => {
 });
 
 test('main_model defaults to fable, falls back on invalid, env overrides', () => {
-  delete process.env.SWITCHBOARD_MAIN_MODEL;
+  delete process.env.CLAUDE_MODEL_ROUTER_MAIN_MODEL;
   assert.equal(store.loadSetups().main_model, 'fable');
   assert.equal(store.mainModel(), 'fable');
   const d = store.loadSetups();
@@ -124,6 +124,6 @@ test('main_model defaults to fable, falls back on invalid, env overrides', () =>
   d.main_model = 'opus';
   store.saveSetups(d);
   assert.equal(store.mainModel(), 'opus');
-  process.env.SWITCHBOARD_MAIN_MODEL = 'sonnet';
-  try { assert.equal(store.mainModel(), 'sonnet'); } finally { delete process.env.SWITCHBOARD_MAIN_MODEL; }
+  process.env.CLAUDE_MODEL_ROUTER_MAIN_MODEL = 'sonnet';
+  try { assert.equal(store.mainModel(), 'sonnet'); } finally { delete process.env.CLAUDE_MODEL_ROUTER_MAIN_MODEL; }
 });

@@ -1,6 +1,6 @@
 {
-  "name": "cc-switchboard",
-  "version": "0.2.11",
+  "name": "claude-model-router",
+  "version": "0.3.0",
   "description": "Per-turn model routing for Claude Code: each prompt runs on the right model and effort, with a band above the prompt and a /router pane.",
   "keywords": [
     "claude-code",
@@ -24,7 +24,7 @@
   "author": "Siamak Rostami",
   "type": "module",
   "bin": {
-    "switchboard": "bin/switchboard.js"
+    "claude-model-router": "bin/claude-model-router.js"
   },
   "files": [
     "bin",

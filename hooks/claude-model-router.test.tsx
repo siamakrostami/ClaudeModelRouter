@@ -1,16 +1,16 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 const BAND = {
-  plugin: 'switchboard',
+  plugin: 'model-router',
   component: 'AbovePrompt',
   props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns: 100, scroll: { offset: 0, bodyRows: 10 } },
 } as const
 
 const PANE = {
-  plugin: 'switchboard',
+  plugin: 'model-router',
   component: 'Pane',
-  requestId: 'switchboard',
-  props: { title: 'Switchboard', isFocused: false, bodyColumns: 40, placement: 'dock', scroll: { offset: 0, bodyRows: 20 }, view: {} },
+  requestId: 'claude-model-router',
+  props: { title: 'Claude Model Router', isFocused: false, bodyColumns: 40, placement: 'dock', scroll: { offset: 0, bodyRows: 20 }, view: {} },
 } as const
 
 const SURFACES = ['terminal', 'desktop'] as const

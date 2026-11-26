@@ -16,7 +16,7 @@ function snapshot() {
 
 function Header({ s }) {
   return h(Box, { borderStyle: 'round', borderColor: 'gray', paddingX: 1, justifyContent: 'space-between' },
-    h(Text, null, h(Text, { bold: true, color: 'whiteBright' }, '⇢ Switchboard'), h(Text, { color: 'gray' }, '  model routing for Claude Code')),
+    h(Text, null, h(Text, { bold: true, color: 'whiteBright' }, '⇢ Claude Model Router'), h(Text, { color: 'gray' }, '  model routing for Claude Code')),
     h(Text, null,
       h(Text, { color: 'gray' }, 'setup '), h(Text, { bold: true, color: 'blueBright' }, s.active),
       h(Text, { color: 'gray' }, '   routing '),

@@ -1,4 +1,4 @@
-# Switchboard: model router for Claude Code (design)
+# Claude Model Router: model router for Claude Code (design)
 
 Date: 2026-11-26 · Owner: Siamak
 
@@ -82,10 +82,10 @@ each of which runs on its own model.
 ### Packaging
 
 - New folder `/Users/siamak/Documents/Matt3r/ClaudeModelRouter/`, a git repo containing a local
-  plugin marketplace (`.claude-plugin/marketplace.json`) with one plugin, `switchboard`.
+  plugin marketplace (`.claude-plugin/marketplace.json`) with one plugin, `claude-model-router`.
 - Installed with `claude plugin marketplace add <folder>` and `claude plugin install`.
-- Node 20+ (ESM JavaScript, no build step). Hooks use only Node built-ins so they start fast; the picker uses Ink + React (created with `React.createElement`, no JSX). Packaged as the npm package `cc-switchboard` with a `switchboard` bin; installed locally (`npm link`) for now, published to npm only with Siamak's OK.
-- Git remote: `git@siamakrostami-GitHub:siamakrostami/switchboard.git` (Siamak's personal SSH alias). Creating the repo and pushing each need his OK.
+- Node 20+ (ESM JavaScript, no build step). Hooks use only Node built-ins so they start fast; the picker uses Ink + React (created with `React.createElement`, no JSX). Packaged as the npm package `claude-model-router` with a `claude-model-router` bin; installed locally (`npm link`) for now, published to npm only with Siamak's OK.
+- Git remote: `git@siamakrostami-GitHub:siamakrostami/ClaudeModelRouter.git` (Siamak's personal SSH alias). Creating the repo and pushing each need his OK.
 - The two previous routers (`claude-model-router-hook`, `alexei-led-claude-router`) were
   already removed on 2026-11-26. All other plugins stay.
 
@@ -141,9 +141,9 @@ types are left alone.
 **First build task is a spike** to prove that `updatedInput` really changes a helper's
 model. One community bug report (April 2026) says frontmatter and per-call models were
 ignored. `CLAUDE_CODE_SUBAGENT_MODEL` also overrides everything; it is unset on this
-machine, and `switchboard show` should warn if it ever gets set.
+machine, and `claude-model-router show` should warn if it ever gets set.
 
-**Fallback if the spike fails:** `switchboard` writes the helper agent files into
+**Fallback if the spike fails:** `claude-model-router` writes the helper agent files into
 `~/.claude/agents/` with `model:` set from the active setup, and rewrites them on every
 `use`/`set`. A new session picks up the change.
 
@@ -159,12 +159,12 @@ of the setup, so passing `effort` on the Agent call follows his instruction.
 `{ "<session_id>": { "enabled": true, "last_route": "code", "running": { "<tool_use_id>": "code→sonnet" } } }`.
 - PreToolUse adds a `running` entry, and PostToolUse removes it.
 - `/router off|on` flips `enabled` for the current session only.
-- `switchboard off|on` sets a global default in `setups.json`.
+- `claude-model-router off|on` sets a global default in `setups.json`.
 - Entries older than 24 h are pruned on write.
 
 ### Setups
 
-- Stored in `~/.claude/switchboard/setups.json`:
+- Stored in `~/.claude/claude-model-router/setups.json`:
   `{ "active": "default", "setups": { "default": { "plan": {"model": "fable"}, "review": {...}, ... } } }`.
 - Each role has a `model` (`fable|opus|sonnet|haiku`) and an `effort`
   (`low|medium|high|xhigh|max`). The defaults are in the table under Intent.
@@ -174,13 +174,13 @@ of the setup, so passing `effort` on the Agent call follows his instruction.
 
 ### Picker and commands
 
-- `switchboard` CLI (Node; full-screen picker built with Ink):
+- `claude-model-router` CLI (Node; full-screen picker built with Ink):
   - With no arguments, it opens a full-screen picker: roles listed with their models; arrow
     keys move, ←/→ cycle the model, `e` cycles effort, `s` saves as a named setup, `l` loads
     one, `d` deletes one, `q` quits.
-  - Subcommands for scripting: `switchboard show`, `switchboard list`, `switchboard use <name>`,
-    `switchboard set <role> <model> [effort]`, `switchboard save <name>`, `switchboard delete <name>`,
-    `switchboard on|off`.
+  - Subcommands for scripting: `claude-model-router show`, `claude-model-router list`, `claude-model-router use <name>`,
+    `claude-model-router set <role> <model> [effort]`, `claude-model-router save <name>`, `claude-model-router delete <name>`,
+    `claude-model-router on|off`.
   - Put on PATH with `npm link` (global npm bin).
 - An optional `/router` slash command in Claude Code runs the same subcommands (`/router`,
   `/router use fast`, `/router off`). It is a convenience only. Routing never needs it.
@@ -208,7 +208,7 @@ creation, and the `updatedInput` rewrite, driven with sample hook JSON.
 ## Changes outside the project folder (each needs Siamak's OK at build time)
 
 - Add the local marketplace and install the plugin.
-- `npm link` the package (puts `switchboard` on PATH).
+- `npm link` the package (puts `claude-model-router` on PATH).
 - Edit `~/.claude/statusline.sh`.
 - Change `"model"` in `~/.claude/settings.json` to `fable`.
 - `git init` the folder (any commit is asked for separately).

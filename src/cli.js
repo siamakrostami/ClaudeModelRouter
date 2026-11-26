@@ -1,7 +1,7 @@
 import { ROLES, ROLE_INFO } from './core/defaults.js';
 import * as store from './core/store.js';
 
-const USAGE = `Usage: switchboard [command]
+const USAGE = `Usage: claude-model-router [command]
 
   (no command)                 open the interactive picker (terminal only)
   show                         show the active setup
@@ -83,7 +83,7 @@ export async function main(argv, io = { stdout: process.stdout, stderr: process.
       case 'on':
       case 'off':
         if (sessionFlag && !session) {
-          io.stderr.write('No session id was passed, so nothing changed. Use `switchboard on|off` in a terminal for a global switch.\n');
+          io.stderr.write('No session id was passed, so nothing changed. Use `claude-model-router on|off` in a terminal for a global switch.\n');
           return 2;
         }
         store.setEnabled(cmd === 'on', session || undefined);

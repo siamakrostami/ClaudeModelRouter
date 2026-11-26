@@ -69,7 +69,7 @@ export function classify(prompt, rules, setup) {
 /** One-line note injected into the main chat. */
 export function note(r, mainModel = 'fable') {
   if (r.role === 'plan' && r.model === mainModel) {
-    return `Switchboard: "plan" work → handle it yourself (${mainModel}).`;
+    return `Claude Model Router: "plan" work → handle it yourself (${mainModel}).`;
   }
-  return `Switchboard: "${r.role}" work → delegate to the ${r.agent} agent (${r.model}, ${r.effort}). Required: do this work through the Agent tool with subagent_type "${r.agent}" instead of doing it yourself; if the request mixes kinds of work, split it across router helpers.`;
+  return `Claude Model Router: "${r.role}" work → delegate to the ${r.agent} agent (${r.model}, ${r.effort}). Required: do this work through the Agent tool with subagent_type "${r.agent}" instead of doing it yourself; if the request mixes kinds of work, split it across router helpers.`;
 }

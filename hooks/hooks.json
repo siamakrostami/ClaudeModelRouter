@@ -1,1 +1,1 @@
-{ "modules": ["./switchboard.tsx"] }
+{ "modules": ["./claude-model-router.tsx"] }

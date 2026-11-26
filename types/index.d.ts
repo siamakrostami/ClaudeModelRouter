@@ -27,7 +27,7 @@ export type Place = { project: string; branch: string | null; ctx: number | null
 
 declare module 'claude-code' {
   interface PluginState {
-    switchboard: {
+    'model-router': {
       config: Shaped<Config | null>
       route: Shaped<Route | null>
       live: Shaped<Live | null>

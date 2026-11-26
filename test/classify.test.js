@@ -95,7 +95,7 @@ test('no match → null, including empty and huge prompts', () => {
 
 test('route carries model, effort and agent from the setup', () => {
   assert.deepEqual(c('Implement the trips endpoint'),
-    { role: 'code', model: 'sonnet', effort: 'medium', agent: 'switchboard:router-code', forced: false, why: 'Implement' });
+    { role: 'code', model: 'sonnet', effort: 'medium', agent: 'claude-model-router:router-code', forced: false, why: 'Implement' });
 });
 
 test('why names the override or the first matched words', () => {
@@ -111,11 +111,11 @@ test('bad regex in rules is skipped, not thrown', () => {
 
 test('note: delegate form', () => {
   assert.equal(note(c('Implement the trips endpoint')),
-    'Switchboard: "code" work → delegate to the switchboard:router-code agent (sonnet, medium). Required: do this work through the Agent tool with subagent_type "switchboard:router-code" instead of doing it yourself; if the request mixes kinds of work, split it across router helpers.');
+    'Claude Model Router: "code" work → delegate to the claude-model-router:router-code agent (sonnet, medium). Required: do this work through the Agent tool with subagent_type "claude-model-router:router-code" instead of doing it yourself; if the request mixes kinds of work, split it across router helpers.');
 });
 
 test('note: plan on the main model is handled in place', () => {
-  assert.equal(note(c('Plan the migration')), 'Switchboard: "plan" work → handle it yourself (fable).');
+  assert.equal(note(c('Plan the migration')), 'Claude Model Router: "plan" work → handle it yourself (fable).');
   const r = { ...c('Plan the migration'), model: 'opus' };
-  assert.match(note(r), /delegate to the switchboard:router-plan agent \(opus, xhigh\)/);
+  assert.match(note(r), /delegate to the claude-model-router:router-plan agent \(opus, xhigh\)/);
 });

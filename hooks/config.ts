@@ -35,8 +35,8 @@ function fill(setup: any): Setup {
 }
 
 export async function home($: any) {
-  const custom = await $.env.get('SWITCHBOARD_HOME')
-  return custom || `${await $.env.get('HOME')}/.claude/switchboard`
+  const custom = await $.env.get('CLAUDE_MODEL_ROUTER_HOME')
+  return custom || `${await $.env.get('HOME')}/.claude/claude-model-router`
 }
 
 export async function readJson($: any, path: string) {
@@ -47,7 +47,7 @@ export async function readJson($: any, path: string) {
   }
 }
 
-/** Read setups.json and rules.json (same files the switchboard CLI edits), filling defaults. */
+/** Read setups.json and rules.json (same files the claude-model-router CLI edits), filling defaults. */
 export async function loadConfig($: any): Promise<Config> {
   const dir = await home($)
   const raw = (await readJson($, `${dir}/setups.json`)) || {}

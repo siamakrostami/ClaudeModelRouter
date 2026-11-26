@@ -111,7 +111,7 @@ export const DEFAULT_RULES = {
   ],
 };
 
-export const AGENT_PREFIX = 'switchboard:router-';
+export const AGENT_PREFIX = 'claude-model-router:router-';
 
 export function agentName(role) {
   return AGENT_PREFIX + role;
@@ -120,6 +120,6 @@ export function agentName(role) {
 /** Map an Agent tool subagent_type to a role, accepting namespaced or bare names. */
 export function roleFromAgent(subagentType) {
   if (typeof subagentType !== 'string') return null;
-  const m = /^(?:switchboard:)?router-([a-z]+)$/.exec(subagentType);
+  const m = /^(?:claude-model-router:)?router-([a-z]+)$/.exec(subagentType);
   return m && ROLES.includes(m[1]) ? m[1] : null;
 }

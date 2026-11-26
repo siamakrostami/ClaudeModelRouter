@@ -15,17 +15,17 @@ import {
   saveConfig,
 } from './config'
 
-const PANE = 'switchboard'
+const PANE = 'claude-model-router'
 
-const config = atom({ plugin: 'switchboard', key: 'config' } as const, null, { shape: 'config-1' })
-const route = atom({ plugin: 'switchboard', key: 'route' } as const, null, { shape: 'route-1' })
-const live = atom({ plugin: 'switchboard', key: 'live' } as const, null, { shape: 'live-1' })
-const paused = atom({ plugin: 'switchboard', key: 'paused' } as const, false)
-const manual = atom({ plugin: 'switchboard', key: 'manual' } as const, null)
-const pin = atom({ plugin: 'switchboard', key: 'pin' } as const, null)
-const place = atom({ plugin: 'switchboard', key: 'place' } as const, null)
-const base = atom({ plugin: 'switchboard', key: 'base' } as const, null)
-const tab = atom({ plugin: 'switchboard', key: 'tab' } as const, 'now')
+const config = atom({ plugin: 'model-router', key: 'config' } as const, null, { shape: 'config-1' })
+const route = atom({ plugin: 'model-router', key: 'route' } as const, null, { shape: 'route-1' })
+const live = atom({ plugin: 'model-router', key: 'live' } as const, null, { shape: 'live-1' })
+const paused = atom({ plugin: 'model-router', key: 'paused' } as const, false)
+const manual = atom({ plugin: 'model-router', key: 'manual' } as const, null)
+const pin = atom({ plugin: 'model-router', key: 'pin' } as const, null)
+const place = atom({ plugin: 'model-router', key: 'place' } as const, null)
+const base = atom({ plugin: 'model-router', key: 'base' } as const, null)
+const tab = atom({ plugin: 'model-router', key: 'tab' } as const, 'now')
 
 async function reload($: any) {
   const cfg = await loadConfig($)
@@ -135,7 +135,7 @@ function ring(pct: number) {
 /** Open the pane on one of its tabs. */
 async function openPane($: any, which: 'now' | 'routes') {
   await update($, tab, () => which)
-  await $.ui.open({ id: PANE, title: 'Switchboard' })
+  await $.ui.open({ id: PANE, title: 'Claude Model Router' })
 }
 
 /**
@@ -184,7 +184,7 @@ async function where($: any) {
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    await $.command.register({ name: 'router', description: 'Switchboard settings: models per task, setups, pause (also: /router off|on|auto|<task>)' })
+    await $.command.register({ name: 'router', description: 'Claude Model Router settings: models per task, setups, pause (also: /router off|on|auto|<task>)' })
     await update($, route, () => null)
     await reload($).catch(() => {})
     await where($).catch(() => {})
@@ -198,23 +198,23 @@ export const register: Register = on => {
     const arg = e.args.trim().toLowerCase()
     if (arg === 'off' || arg === 'pause') {
       await update($, paused, () => true)
-      return { text: 'Switchboard paused for this session.' }
+      return { text: 'Claude Model Router paused for this session.' }
     }
     if (arg === 'on' || arg === 'resume') {
       await update($, paused, () => false)
-      return { text: 'Switchboard routing on.' }
+      return { text: 'Claude Model Router routing on.' }
     }
     if (arg === 'auto') {
       await update($, pin, () => null)
-      return { text: 'Switchboard: back to automatic routing.' }
+      return { text: 'Claude Model Router: back to automatic routing.' }
     }
     if (MODEL_LIST.includes(arg)) {
       await update($, pin, () => arg)
-      return { text: `Switchboard: every turn uses ${MODEL_NAME[arg]}. /router auto to undo.` }
+      return { text: `Claude Model Router: every turn uses ${MODEL_NAME[arg]}. /router auto to undo.` }
     }
     await reload($).catch(() => {})
-    await $.ui.open({ id: PANE, title: 'Switchboard' })
-    return { text: 'Switchboard pane opened.' }
+    await $.ui.open({ id: PANE, title: 'Claude Model Router' })
+    return { text: 'Claude Model Router pane opened.' }
   })
 
   on('turn.complete', async ($, e, next) => {

@@ -1,4 +1,4 @@
-# Switchboard Implementation Plan
+# Claude Model Router Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -7,7 +7,7 @@
 **Architecture:**
 - A UserPromptSubmit hook classifies the prompt with keyword rules. It adds a one-line note telling the main chat (Fable) which helper agent to hand the work to.
 - A PreToolUse hook on Agent/Task forces each `router-*` helper's `model`/`effort` from the active setup, and records running helpers in per-session state. A PostToolUse hook clears them.
-- The `switchboard` CLI (subcommands plus an Ink picker) edits setups and prints the status line segment.
+- The `claude-model-router` CLI (subcommands plus an Ink picker) edits setups and prints the status line segment.
 
 **Tech Stack:**
 - Node 20+, ESM JavaScript, no build step.
@@ -15,9 +15,9 @@
 - `src/picker/` uses `ink` + `react`, created with `React.createElement`.
 - Tests use `node:test` + `node:assert/strict`.
 
-**Spec:** `docs/superpowers/specs/2026-11-26-switchboard-design.md`
+**Spec:** `docs/superpowers/specs/2026-11-26-claude-model-router-design.md`
 
-**Execution:** Native (chosen by Siamak). Each commit, and every change outside `switchboard/`, needs Siamak's explicit OK.
+**Execution:** Native (chosen by Siamak). Each commit, and every change outside `claude-model-router/`, needs Siamak's explicit OK.
 
 ## Global Constraints
 
@@ -30,12 +30,12 @@
   - write: sonnet / medium
   - chores: haiku / low
 - Models: `fable|opus|sonnet|haiku`. Efforts: `low|medium|high|xhigh|max`.
-- User data is in `~/.claude/switchboard/` (`setups.json`, `rules.json`, `state.json`, `error.log`). `SWITCHBOARD_HOME` overrides that location.
+- User data is in `~/.claude/claude-model-router/` (`setups.json`, `rules.json`, `state.json`, `error.log`). `CLAUDE_MODEL_ROUTER_HOME` overrides that location.
 - Hooks finish in under 200 ms and never import `ink`/`react`. On any error they append to `error.log`, print nothing and exit 0.
 - The routing note is a single line.
-- Agent names: `switchboard:router-<role>`. Matching also accepts the bare `router-<role>`.
-- npm package: `cc-switchboard`, with bin `switchboard`.
-- Git remote: `git@siamakrostami-GitHub:siamakrostami/switchboard.git`.
+- Agent names: `claude-model-router:router-<role>`. Matching also accepts the bare `router-<role>`.
+- npm package: `claude-model-router`, with bin `claude-model-router`.
+- Git remote: `git@siamakrostami-GitHub:siamakrostami/ClaudeModelRouter.git`.
 
 ## Review Focus
 
@@ -48,11 +48,11 @@
 ## File Structure
 
 ```
-switchboard/
-  package.json                          name cc-switchboard, type module, bin {switchboard: bin/switchboard.js}, deps ink, react
+claude-model-router/
+  package.json                          name claude-model-router, type module, bin {claude-model-router: bin/claude-model-router.js}, deps ink, react
   .claude-plugin/marketplace.json       local marketplace → ./plugin
   plugin/
-    .claude-plugin/plugin.json          name "switchboard"
+    .claude-plugin/plugin.json          name "claude-model-router"
     hooks/hooks.json                    node "${CLAUDE_PLUGIN_ROOT}/hooks/<x>.js"
     hooks/on-prompt.js on-agent-pre.js on-agent-post.js   thin stdin→stdout wrappers
     agents/router-{plan,review,hard,code,write,chores}.md
@@ -60,13 +60,13 @@ switchboard/
   src/core/defaults.js store.js classify.js hooks.js status.js
   src/cli.js                            subcommands
   src/picker/app.js                     Ink picker
-  bin/switchboard.js
+  bin/claude-model-router.js
   test/*.test.js
 ```
 
 The hooks import `../../src/core/*.js` through relative paths. The plugin folder therefore has to live inside the repo, which is the case with the local marketplace.
 
-Tests: `cd switchboard && node --test test/`
+Tests: `cd claude-model-router && node --test test/`
 
 ---
 
@@ -78,19 +78,19 @@ Throwaway `spike/plugin/` containing:
 
 - [ ] Run `claude -p --plugin-dir spike/plugin --output-format json "Use the probe agent to say hi"`.
 - [ ] Grep `"model":"…"` in that session's `~/.claude/projects/<slug>/<session>/subagents/*.jsonl`. Expected: `claude-haiku-5-5`.
-  - If it shows Sonnet, use the **fallback**: `handle_agent_pre` only records state, and `switchboard use/set` rewrites `~/.claude/agents/router-*.md`. Record the outcome here.
+  - If it shows Sonnet, use the **fallback**: `handle_agent_pre` only records state, and `claude-model-router use/set` rewrites `~/.claude/agents/router-*.md`. Record the outcome here.
 - [ ] Delete `spike/`.
 
 ### Task 1: defaults + store
 
-**Files:** `src/core/defaults.js` and `src/core/store.js`. Test: `test/store.test.js`. Each test gets its own temp `SWITCHBOARD_HOME`.
+**Files:** `src/core/defaults.js` and `src/core/store.js`. Test: `test/store.test.js`. Each test gets its own temp `CLAUDE_MODEL_ROUTER_HOME`.
 
 **Produces:**
 - `defaults.js`:
   - `ROLES` (tie order), `MODELS`, `EFFORTS`
   - `DEFAULT_SETUP: {[role]: {model, effort}}`
   - `DEFAULT_RULES: {[role]: string[]}` (case-insensitive regex sources)
-  - `agentName(role) → "switchboard:router-<role>"`
+  - `agentName(role) → "claude-model-router:router-<role>"`
   - `roleFromAgent(subagentType) → role | null`
 - `store.js`:
   - `home()`
@@ -148,8 +148,8 @@ Throwaway `spike/plugin/` containing:
   - "#self plan this" → null
   - "hello", "" and "x".repeat(50000) → null, with the 50 KB case under 50 ms
 - [ ] **Exact note strings:**
-  - code: `Switchboard: "code" work → delegate to the switchboard:router-code agent (sonnet, medium). If the request mixes kinds of work, split it across router helpers.`
-  - plan, when plan's model equals mainModel: `Switchboard: "plan" work → handle it yourself (fable).`
+  - code: `Claude Model Router: "code" work → delegate to the claude-model-router:router-code agent (sonnet, medium). If the request mixes kinds of work, split it across router helpers.`
+  - plan, when plan's model equals mainModel: `Claude Model Router: "plan" work → handle it yourself (fable).`
 - [ ] Run the tests (FAIL), then implement:
   - score = number of matching rule patterns per role; the highest wins; ties follow ROLES order
   - overrides are checked first
@@ -175,7 +175,7 @@ Test: `test/hooks.test.js`.
   - **handlePrompt (code prompt):** returns `{hookSpecificOutput:{hookEventName:"UserPromptSubmit", additionalContext}}`, and `readState(sid).last_route === "code"`.
   - **handlePrompt, no match:** "hello" → null.
   - **handlePrompt, disabled session:** → null.
-  - **handleAgentPre** with `switchboard:router-code`, and again with the bare `router-code`:
+  - **handleAgentPre** with `claude-model-router:router-code`, and again with the bare `router-code`:
     - `updatedInput.model === "sonnet"` and `effort === "medium"`
     - the other keys are kept
     - `permissionDecision === "allow"`
@@ -189,19 +189,19 @@ Test: `test/hooks.test.js`.
     - `router-plan` and `router-review` get `tools: Read, Grep, Glob, Bash, WebSearch, WebFetch`
     - the body is 3–6 lines of role guidance
     - `router-write` uses the matt3r-writing skill when it is available
-  - **`router.md`:** `` !`switchboard $ARGUMENTS --session ${CLAUDE_SESSION_ID}` ``, then show the output as is.
+  - **`router.md`:** `` !`claude-model-router $ARGUMENTS --session ${CLAUDE_SESSION_ID}` ``, then show the output as is.
 - [ ] Run the tests (PASS).
 - [ ] Smoke test: run `claude -p --plugin-dir plugin "rename foo to bar — just say which agent you'd use"`. The reply should name `router-chores`.
 - [ ] Commit with OK.
 
 ### Task 4: CLI, Ink picker, status segment
 
-**Files:** `src/cli.js`, `src/picker/app.js`, `src/core/status.js`, `bin/switchboard.js` and `package.json`. Tests: `test/cli.test.js` and `test/status.test.js`.
+**Files:** `src/cli.js`, `src/picker/app.js`, `src/core/status.js`, `bin/claude-model-router.js` and `package.json`. Tests: `test/cli.test.js` and `test/status.test.js`.
 
 **Produces:**
 - `main(argv, {stdout, stderr}) → exitCode`
 - `statusSegment(sessionId | null) → string`
-- `switchboard status-segment <sid>`
+- `claude-model-router status-segment <sid>`
 
 - [ ] **Tests:**
   - `show` prints six aligned rows, the first being `plan     fable    xhigh`. It warns if `CLAUDE_CODE_SUBAGENT_MODEL` is set.
@@ -217,7 +217,7 @@ Test: `test/hooks.test.js`.
     - null session → `⇢ default`
     - disabled → `⇢ off`
 - [ ] Run the tests (FAIL), then implement.
-  - `switchboard` with no arguments on a TTY dynamically imports the picker and renders it. Without a TTY it behaves like `show`.
+  - `claude-model-router` with no arguments on a TTY dynamically imports the picker and renders it. Without a TTY it behaves like `show`.
   - **Picker layout:**
     - a header with the active setup's name
     - a table of the roles with model and effort; the selected row is highlighted and each model has its own color
@@ -232,15 +232,15 @@ Test: `test/hooks.test.js`.
     - `q` quits
     - every change is saved immediately
   - Under the spike fallback, `use`/`set` also rewrite `~/.claude/agents/router-*.md`.
-- [ ] Run the tests (PASS). `npm install` locally, then run `node bin/switchboard.js` and check the picker by hand. Commit with OK.
+- [ ] Run the tests (PASS). `npm install` locally, then run `node bin/claude-model-router.js` and check the picker by hand. Commit with OK.
 
 ### Task 5: Final review, install, wire up (ask once, with the full list)
 
 - [ ] Final review: one fresh reviewer subagent on the whole repo against the spec. Fix what it finds.
-- [ ] `git init`, then `git remote add origin git@siamakrostami-GitHub:siamakrostami/switchboard.git`. Siamak creates the GitHub repo (`gh` is logged in to a different account). Commit and push only with his OK.
-- [ ] `claude plugin marketplace add <repo>` and `claude plugin install switchboard@switchboard`.
-- [ ] `npm link` in the repo, so `switchboard` is on PATH.
-- [ ] `~/.claude/statusline.sh`: append ` | $(switchboard status-segment "$session_id")`, with `session_id` taken from the input JSON.
+- [ ] `git init`, then `git remote add origin git@siamakrostami-GitHub:siamakrostami/ClaudeModelRouter.git`. Siamak creates the GitHub repo (`gh` is logged in to a different account). Commit and push only with his OK.
+- [ ] `claude plugin marketplace add <repo>` and `claude plugin install model-router@model-router`.
+- [ ] `npm link` in the repo, so `claude-model-router` is on PATH.
+- [ ] `~/.claude/statusline.sh`: append ` | $(claude-model-router status-segment "$session_id")`, with `session_id` taken from the input JSON.
 - [ ] `~/.claude/settings.json`: set `"model": "fable"`, plus an xhigh `modelSettings` entry for `claude-fable-5-2`.
 - [ ] **Verify** in a new session with "rename the variable foo to bar in README":
   - the reply delegates to `router-chores`

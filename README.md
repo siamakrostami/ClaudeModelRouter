@@ -1,10 +1,10 @@
-# Switchboard
+# Claude Model Router
 
-[![npm](https://img.shields.io/npm/v/cc-switchboard.svg)](https://www.npmjs.com/package/cc-switchboard)
-[![node](https://img.shields.io/node/v/cc-switchboard.svg)](https://nodejs.org)
-[![license](https://img.shields.io/npm/l/cc-switchboard.svg)](LICENSE)
+[![npm](https://img.shields.io/npm/v/claude-model-router.svg)](https://www.npmjs.com/package/claude-model-router)
+[![node](https://img.shields.io/node/v/claude-model-router.svg)](https://nodejs.org)
+[![license](https://img.shields.io/npm/l/claude-model-router.svg)](LICENSE)
 
-Per-turn model routing for Claude Code. You type your request as usual, and Switchboard
+Per-turn model routing for Claude Code. You type your request as usual, and Claude Model Router
 sends that turn to the model and effort that suit it:
 
 | Role | Handles | Default |
@@ -20,7 +20,7 @@ A prompt that matches no role stays on your main model.
 
 ## How it works
 
-Switchboard is a Claude Code mod:
+Claude Model Router is a Claude Code mod:
 
 - **`prompt.submit`** sorts the prompt into a role with keyword rules.
 - **`turn.step`** sends every main-chat request of that turn with the role's model and
@@ -39,9 +39,9 @@ Switchboard is a Claude Code mod:
 ## Install
 
 ```bash
-npm install -g cc-switchboard
-claude plugin marketplace add "$(npm root -g)/cc-switchboard"
-claude plugin install switchboard@switchboard
+npm install -g claude-model-router
+claude plugin marketplace add "$(npm root -g)/claude-model-router"
+claude plugin install model-router@model-router
 ```
 
 From a clone instead: `npm install && npm link`, then `claude plugin marketplace add "$PWD"`
@@ -63,21 +63,21 @@ In a session:
 - `/router hard`: pin every turn to one role; `/router auto` unpins
 - `/router off` / `/router on`: pause or resume this session
 
-If you switch models yourself with `/model`, Switchboard steps aside until you switch back
+If you switch models yourself with `/model`, Claude Model Router steps aside until you switch back
 to the main model (set `main_model` in `setups.json` if yours is not Fable).
 
 From a terminal:
 
 ```bash
-switchboard                      # full-screen setup picker
-switchboard show | list
-switchboard set code opus high
-switchboard save fast            # save the current setup under a name
-switchboard use default
-switchboard off | on             # everywhere
+claude-model-router                      # full-screen setup picker
+claude-model-router show | list
+claude-model-router set code opus high
+claude-model-router save fast            # save the current setup under a name
+claude-model-router use default
+claude-model-router off | on             # everywhere
 ```
 
-Data lives in `~/.claude/switchboard/`: `setups.json`, and `rules.json` (keyword regexes,
+Data lives in `~/.claude/claude-model-router/`: `setups.json`, and `rules.json` (keyword regexes,
 which you can edit).
 
 ## Test

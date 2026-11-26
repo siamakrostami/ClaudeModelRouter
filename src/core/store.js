@@ -6,7 +6,7 @@ import { ROLES, MODELS, EFFORTS, DEFAULT_SETUP, DEFAULT_RULES } from './defaults
 const DAY_MS = 24 * 3600 * 1000;
 
 export function home() {
-  return process.env.SWITCHBOARD_HOME || path.join(os.homedir(), '.claude', 'switchboard');
+  return process.env.CLAUDE_MODEL_ROUTER_HOME || path.join(os.homedir(), '.claude', 'claude-model-router');
 }
 
 function file(name) {
@@ -54,9 +54,9 @@ export function loadSetups() {
   return d;
 }
 
-/** The model the main chat is configured to run on. SWITCHBOARD_MAIN_MODEL overrides setups.json. */
+/** The model the main chat is configured to run on. CLAUDE_MODEL_ROUTER_MAIN_MODEL overrides setups.json. */
 export function mainModel() {
-  const env = process.env.SWITCHBOARD_MAIN_MODEL;
+  const env = process.env.CLAUDE_MODEL_ROUTER_MAIN_MODEL;
   return MODELS.includes(env) ? env : loadSetups().main_model;
 }
 
