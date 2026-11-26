@@ -412,8 +412,8 @@ export const register: Register = on => {
                 <Text dimColor={pl.ctx < 60} color={pl.ctx >= 60 ? ring(pl.ctx).color : undefined}> {pl.ctx}%</Text>
               </Text>
             ) : null}
-            <Button key="pin" label={pinned ? `${MODEL_NAME[pinned] ?? cap(pinned)} ▾` : 'Auto ▾'} variant="secondary" onPress={() => openPane($, 'now')} />
-            <Button key="settings" label="⚙️" variant="secondary" onPress={() => openPane($, 'routes')} />
+            <Button key="pin" label={pinned ? `${MODEL_NAME[pinned] ?? cap(pinned)} ▾` : 'Auto ▾'} plain onPress={() => openPane($, 'now')} />
+            <Button key="settings" label="⚙️" plain onPress={() => openPane($, 'routes')} />
           </Box>
         </Box>
       </Box>
