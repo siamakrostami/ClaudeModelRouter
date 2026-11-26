@@ -83,7 +83,7 @@ each of which runs on its own model.
 
 ### Packaging
 
-- New folder `/Users/siamak/Documents/Matt3r/ClaudeModelRouter/`, a git repo containing a local
+- A new folder of its own (next to the other repos), a git repo containing a local
   plugin marketplace (`.claude-plugin/marketplace.json`) with one plugin, `claude-model-router`.
 - Installed with `claude plugin marketplace add <folder>` and `claude plugin install`.
 - Node 20+ (ESM JavaScript, no build step). Hooks use only Node built-ins so they start fast; the picker uses Ink + React (created with `React.createElement`, no JSX). Packaged as the npm package `claude-model-router` with a `claude-model-router` bin; installed locally (`npm link`) for now, published to npm only with Siamak's OK.

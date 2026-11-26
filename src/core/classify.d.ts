@@ -16,3 +16,6 @@ export function classify(
   rules: Record<string, readonly string[]>,
   setup: Record<string, RoleSetting>,
 ): Classified | null;
+
+/** The regex source a user rule (a plain word or phrase) compiles to: escaped, `\s+` between words, `\b` at word ends. */
+export function phraseSource(phrase: string): string;

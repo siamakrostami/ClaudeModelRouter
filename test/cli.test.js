@@ -93,3 +93,67 @@ test('unknown command exits 2 with help', async () => {
   assert.match(r.err, /usage/i);
 });
 
+
+test('M1: a relative CLAUDE_MODEL_ROUTER_HOME is refused', async () => {
+  process.env.CLAUDE_MODEL_ROUTER_HOME = 'relative/dir';
+  const r = await run('show');
+  assert.equal(r.code, 2);
+  assert.match(r.err, /absolute/);
+  assert.throws(() => store.home(), /absolute/);
+  assert.equal(fs.existsSync('relative'), false);
+});
+
+test('M1: any absolute CLAUDE_MODEL_ROUTER_HOME is accepted by the CLI', async () => {
+  assert.equal(store.home(), home);
+  assert.equal((await run('show')).code, 0);
+});
+
+// ---- L3: save / use / delete without a name print usage ----
+
+for (const cmd of ['save', 'use', 'delete']) {
+  test(`L3: ${cmd} with no name prints usage and exits 2`, async () => {
+    const r = await run(cmd);
+    assert.equal(r.code, 2);
+    assert.match(r.err, new RegExp(`usage: claude-model-router ${cmd} <`, 'i'));
+    assert.deepEqual(store.listSetups().names, ['default']);
+  });
+}
+
+test('L3: save __proto__ is refused', async () => {
+  const r = await run('save', '__proto__');
+  assert.equal(r.code, 2);
+  assert.deepEqual(store.listSetups().names, ['default']);
+});
+
+// ---- L4: names from the file never reach the terminal with control bytes ----
+
+test('L4: list, show and errors print no escape sequences from setups.json', async () => {
+  const evil = '\u001b]0;pwned\u0007\u001b[2J';
+  fs.writeFileSync(path.join(home, 'setups.json'), JSON.stringify({ active: evil, setups: { [evil]: {}, ok: {} } }));
+  for (const args of [['list'], ['show'], ['use', 'nope']]) {
+    const r = await run(...args);
+    assert.doesNotMatch(r.out + r.err, /[\x00-\x08\x0b-\x1f\x7f]/, args.join(' '));
+  }
+});
+
+test('L4: a typed name with escape bytes is not echoed raw', async () => {
+  const r = await run('use', 'x\u001b[31my');
+  assert.equal(r.code, 2);
+  assert.doesNotMatch(r.err, /\u001b/);
+});
+
+// ---- L6: the picker falls back to show when ink cannot be loaded ----
+
+test('L6: no picker module: show is printed with a one-line note', async () => {
+  let out = '', err = '';
+  const code = await main([], {
+    stdout: { write: s => { out += s; } },
+    stderr: { write: s => { err += s; } },
+    isTTY: true,
+    loadPicker: () => Promise.reject(new Error("Cannot find package 'ink'")),
+  });
+  assert.equal(code, 0);
+  assert.match(out, /^plan\s+fable/m);
+  assert.equal(err.trim().split('\n').length, 1);
+  assert.match(err, /picker/i);
+});

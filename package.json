@@ -1,6 +1,6 @@
 {
   "name": "@siamakrostami/claude-model-router",
-  "version": "0.3.1",
+  "version": "0.3.3",
   "description": "Per-turn model routing for Claude Code: each prompt runs on the right model and effort, with a band above the prompt and a /router pane.",
   "keywords": [
     "claude-code",
@@ -34,6 +34,7 @@
     ".claude-plugin",
     "README.md",
     "LICENSE",
+    "npm-shrinkwrap.json",
     "!hooks/*.test.tsx"
   ],
   "engines": {
@@ -41,6 +42,7 @@
   },
   "scripts": {
     "test": "node --test test/",
+    "prepublishOnly": "node --test test/",
     "test:ui": "claude plugin test ."
   },
   "dependencies": {

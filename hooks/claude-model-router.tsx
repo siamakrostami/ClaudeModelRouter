@@ -2,6 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { PromptSubmitInput, Register } from 'claude-code'
 
 import { classify } from '../src/core/classify.js'
+import { clean, fingerprint } from '../src/core/safe.js'
 import type { Config, Live, Place, Route, Setup } from '../types'
 import {
   EFFORT_LIST,
@@ -24,8 +25,11 @@ const route = atom({ plugin: 'model-router', key: 'route' } as const, null, { sh
 const last = atom({ plugin: 'model-router', key: 'last' } as const, null, { shape: 'last-1' })
 /** Decided at an idle submit; `turn.start` binds it to the turn that follows. */
 const pending = atom({ plugin: 'model-router', key: 'pending' } as const, null, { shape: 'pending-1' })
-/** A prompt typed while a turn ran: bound only to a later turn that starts with the same text. */
-const queued = atom({ plugin: 'model-router', key: 'queued' } as const, null, { shape: 'queued-1' })
+/**
+ * A prompt typed while a turn ran: bound only to a later turn that starts with the same text.
+ * Only a fingerprint of the text is kept (fingerprint: FNV-1a hash plus length), never the text.
+ */
+const queued = atom({ plugin: 'model-router', key: 'queued' } as const, null, { shape: 'queued-2' })
 const live = atom({ plugin: 'model-router', key: 'live' } as const, null, { shape: 'live-1' })
 const paused = atom({ plugin: 'model-router', key: 'paused' } as const, false)
 const manual = atom({ plugin: 'model-router', key: 'manual' } as const, null)
@@ -33,6 +37,20 @@ const pin = atom({ plugin: 'model-router', key: 'pin' } as const, null)
 const place = atom({ plugin: 'model-router', key: 'place' } as const, null)
 const base = atom({ plugin: 'model-router', key: 'base' } as const, null)
 const tab = atom({ plugin: 'model-router', key: 'tab' } as const, 'now')
+
+/** The active setup; an own key only, so a name like toString never reaches Object.prototype. */
+function activeOf(cfg: Config): Setup {
+  return Object.hasOwn(cfg.setups, cfg.active) ? (cfg.setups[cfg.active] as Setup) : {}
+}
+
+/** One task's slot of a setup, an own key only. */
+function slotIn(setup: Setup | undefined, role: string) {
+  return setup && Object.hasOwn(setup, role) ? setup[role] : undefined
+}
+
+/** How long a name, folder or branch may be when drawn. */
+const NAME_MAX = 40
+const PLACE_MAX = 120
 
 async function reload($: any) {
   const cfg = await loadConfig($)
@@ -52,8 +70,9 @@ async function edit($: any, fn: (cfg: Config) => Config) {
 
 /** Pinned to a model: the effort of the first task that runs on it, else high. */
 function pinRoute(setup: Setup, pinned: string): Route {
-  const role = ROLE_LIST.find(r => setup[r]?.model === pinned) ?? 'code'
-  const effort = setup[role]?.model === pinned ? setup[role].effort : 'high'
+  const role = ROLE_LIST.find(r => slotIn(setup, r)?.model === pinned) ?? 'code'
+  const slot = slotIn(setup, role)
+  const effort = slot?.model === pinned ? slot.effort : 'high'
   return { role, model: pinned, effort, why: '', source: 'pin' }
 }
 
@@ -83,7 +102,7 @@ async function decide($: any, text: string, isCommand: boolean) {
   const isManual = sessionModel !== '' && !!started && sessionModel !== started
   await update($, manual, () => (isManual ? sessionModel : null))
   if (!cfg.enabled || isManual || (await read($, paused))) return null
-  const setup: Setup = cfg.setups[cfg.active] ?? {}
+  const setup = activeOf(cfg)
   const pinned = await read($, pin)
   if (pinned && MODEL_LIST.includes(pinned)) return pinRoute(setup, pinned)
   if (isCommand) return null
@@ -102,9 +121,10 @@ async function power($: any, turnOn: boolean) {
 /** Set one task's model or effort in the active setup. */
 async function setSlot($: any, role: string, field: 'model' | 'effort', value: string) {
   await edit($, c => {
-    const setup = c.setups[c.active]
-    const slot = setup?.[role]
-    if (!setup || !slot) return c
+    if (!Object.hasOwn(c.setups, c.active)) return c
+    const setup = c.setups[c.active] as Setup
+    const slot = slotIn(setup, role)
+    if (!slot) return c
     return { ...c, setups: { ...c.setups, [c.active]: { ...setup, [role]: { ...slot, [field]: value } } } }
   })
 }
@@ -119,7 +139,7 @@ type View = { cfg: Config; last: Route | null; live: Live | null; paused: boolea
  */
 function status(v: View) {
   const { cfg, last: r, live: l, manual: man } = v
-  const pinned = v.pin && MODEL_LIST.includes(v.pin) ? pinRoute(cfg.setups[cfg.active] ?? {}, v.pin) : null
+  const pinned = v.pin && MODEL_LIST.includes(v.pin) ? pinRoute(activeOf(cfg), v.pin) : null
   const mode: Mode = v.paused || !cfg.enabled ? 'off' : man ? 'manual' : pinned ? 'pinned' : r ? 'auto' : 'main'
   const idle = l ?? { model: v.base ?? '', effort: '' }
   const shown =
@@ -129,7 +149,7 @@ function status(v: View) {
     model: shown.model,
     effort: shown.effort,
     role: mode === 'auto' && r ? r.role : mode === 'pinned' && pinned ? pinned.role : '',
-    why: mode === 'auto' && r?.why ? r.why : '',
+    why: mode === 'auto' && r?.why ? clean(r.why, 40) : '',
   }
 }
 
@@ -206,8 +226,8 @@ function padLabel(label: string, all: readonly string[], surface: string) {
 }
 
 /**
- * The repo this session works in. When the folder is a repo, that one; when it holds several
- * repos (like ~/Documents/Matt3r), the child whose HEAD moved most recently: the one in use.
+ * The repo this session works in. When the folder is a repo, that one; when it is a folder that
+ * holds several repos, the child whose HEAD moved most recently: the one in use.
  */
 const MAX_CHILDREN = 40 // a folder of repos is scanned this far at most, so a huge folder stays quick
 
@@ -235,9 +255,10 @@ async function where($: any) {
   const repo = await repoOf($, dir)
   const usage = await $.session.usage().catch(() => null)
   const pct = usage?.context?.percent
+  // Folder and branch names come from disk: no control bytes reach the band.
   const value: Place = {
-    project: repo?.name ?? dir.split('/').filter(Boolean).pop() ?? dir,
-    branch: repo?.branch ?? null,
+    project: clean(repo?.name ?? dir.split('/').filter(Boolean).pop() ?? dir, PLACE_MAX),
+    branch: repo?.branch ? clean(repo.branch, PLACE_MAX) : null,
     ctx: typeof pct === 'number' ? pct : null,
   }
   await update($, place, () => value)
@@ -248,13 +269,14 @@ async function routeSubmit($: any, e: PromptSubmitInput) {
   const person = fromPerson(e)
   if (e.turnId === undefined) {
     // Idle: this prompt starts the next turn. Decide its route now; turn.start binds it.
+    // A new submit always replaces an older pending route.
     const r = person ? await decide($, e.text, !!e.command).catch(() => null) : null
     await update($, pending, () => ({ route: r }))
     if (person) await update($, last, () => r)
   } else if (person && !e.command) {
     // Typed while a turn runs: never touches that turn. Kept for a later turn with this text.
     const r = await decide($, e.text, false).catch(() => null)
-    await update($, queued, () => (r ? { text: e.text, route: r } : null))
+    await update($, queued, () => (r ? { hash: fingerprint(e.text.trim()), route: r } : null))
   }
 }
 
@@ -301,7 +323,17 @@ export const register: Register = on => {
   on('prompt.submit', async ($, e, next) => {
     where($).catch(() => {}) // the band's repo and context: refreshed, never waited for
     await routeSubmit($, e).catch(() => {}) // best effort: on any failure the prompt goes through unrouted
-    return next(e)
+    let result: Awaited<ReturnType<typeof next>>
+    try {
+      result = await next(e)
+    } catch (err) {
+      if (e.turnId === undefined) await update($, pending, () => null).catch(() => {})
+      throw err
+    }
+    // The prompt did not enter (a hook or the engine dropped it): no turn will bind its route,
+    // so it must not wait for an unrelated later turn.
+    if (e.turnId === undefined && result && 'drop' in result && result.drop !== undefined) await update($, pending, () => null)
+    return result
   })
 
   on('turn.start', async ($, e, next) => {
@@ -310,7 +342,7 @@ export const register: Register = on => {
     let r: Route | null = p ? p.route : null
     if (!p) {
       const q = await read($, queued)
-      if (q && e.text.trim() && q.text.trim() === e.text.trim()) {
+      if (q && e.text.trim() && q.hash === fingerprint(e.text.trim())) {
         r = q.route
         await update($, queued, () => null)
         await update($, last, () => r)
@@ -326,6 +358,8 @@ export const register: Register = on => {
     if (e.agentId === undefined) {
       const r = await read($, route)
       if (r && r.turnId === e.turnId) await update($, route, () => null)
+      await update($, pending, () => null) // a route decided for a turn that never started ends here
+
       await where($).catch(() => {})
     }
     return result
@@ -357,7 +391,7 @@ export const register: Register = on => {
     // Repo | branch gets what is left after the route and the controls, and only if a useful
     // part of it fits; it is cut to that width, so a long branch never pushes the row over.
     const room = cols - PLACE_RESERVED
-    const where = pl ? `${pl.project}${pl.branch ? ` | ${pl.branch}` : ''}` : ''
+    const where = pl ? `${clean(pl.project, PLACE_MAX)}${pl.branch ? ` | ${clean(pl.branch, PLACE_MAX)}` : ''}` : ''
     const placeText = where && room >= PLACE_MIN ? clip(where, room) : ''
 
     const row = (
@@ -398,8 +432,8 @@ export const register: Register = on => {
     const pinned = seen.pin
     const pl = await read($, place)
     const isOff = s.mode === 'off'
-    const setup: Setup = cfg.setups[cfg.active] ?? {}
-    const slotOf = (role: string) => setup[role] ?? { model: '', effort: '' }
+    const setup = activeOf(cfg)
+    const slotOf = (role: string) => slotIn(setup, role) ?? { model: '', effort: '' }
     const startedOn = seen.base
     // The Models rows need ~49 columns side by side; a narrower dock stacks each row in two lines.
     const narrow = (e.props.bodyColumns ?? 60) < 50
@@ -433,7 +467,7 @@ export const register: Register = on => {
       return (
         <Box flexDirection="column">
           {header}
-          {section(`Models · ${cfg.active}`)}
+          {section(`Models · ${clean(cfg.active, NAME_MAX)}`)}
           <Box flexDirection="column" borderStyle="round" borderDimColor paddingX={1}>
             {ROLE_LIST.map(role => {
               const slot = slotOf(role)
@@ -484,7 +518,7 @@ export const register: Register = on => {
             <Box flexDirection="column">
               {section('Setup')}
               <Box borderStyle="round" borderDimColor paddingX={1}>
-                <Select key="setup" options={Object.keys(cfg.setups).map(v => ({ value: v }))} value={cfg.active} onSelect={v => edit($, c => (c.setups[v] ? { ...c, active: v } : c))} />
+                <Select key="setup" options={Object.keys(cfg.setups).map(v => ({ value: v, label: clean(v, NAME_MAX) }))} value={cfg.active} onSelect={v => edit($, c => (Object.hasOwn(c.setups, v) ? { ...c, active: v } : c))} />
               </Box>
             </Box>
           ) : null}
@@ -508,7 +542,7 @@ export const register: Register = on => {
           <Text wrap="truncate-end">
             <Text color={accent} dimColor={isOff}>{m.on}</Text>
             <Text dimColor>{m.off}</Text>
-            <Text dimColor size="footnote">{s.effort ? `  ${effortLabel(s.effort)} effort` : ''}{s.why ? `  ← ${s.why}` : ''}</Text>
+            <Text dimColor size="footnote">{s.effort ? `  ${effortLabel(s.effort)} effort` : ''}{s.why ? `  ← ${clean(s.why, 40)}` : ''}</Text>
           </Text>
           {s.mode === 'manual' ? (
             <Text color="warning" size="footnote" wrap="truncate-end">

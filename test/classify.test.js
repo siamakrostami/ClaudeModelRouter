@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { DEFAULT_RULES, DEFAULT_SETUP } from '../src/core/defaults.js';
 import { classify } from '../src/core/classify.js';
 
@@ -108,7 +109,7 @@ test('why names the override or the first matched words', () => {
   assert.equal(c('Debug the flaky upload test').why, 'Debug');
 });
 
-test('bad regex in rules is skipped, not thrown', () => {
+test('a user rule that would be a bad regex is not thrown', () => {
   const rules = { ...DEFAULT_RULES, code: ['(unclosed', 'implement'] };
   assert.equal(classify('implement it', rules, DEFAULT_SETUP).role, 'code');
 });
@@ -164,4 +165,145 @@ test('a long prompt that opens with a chores verb is still chores', () => {
 
 test('a long prompt whose only match is a chores word stays on the session model', () => {
   assert.equal(role('i was reading the logs this morning and want to look up what the nightly cron does with the old exports'), null);
+});
+
+// ---- M2: user rules are plain words or phrases, never regexes, so rules.json cannot hang prompt.submit ----
+
+const withWrite = patterns => ({ ...DEFAULT_RULES, write: patterns });
+const writes = (prompt, patterns) => classify(prompt, withWrite(patterns), DEFAULT_SETUP)?.role === 'write';
+
+/**
+ * Classify 4000 chars of `a` plus `!` with `pattern` as a user rule in every role, in a child
+ * process that is killed after 1500 ms, so a regex that backtracks fails the test instead of
+ * hanging the run. Returns the time classify took, or Infinity when the child was killed.
+ */
+function timedInChild(pattern) {
+  const url = new URL('../src/core/classify.js', import.meta.url).href;
+  const defs = new URL('../src/core/defaults.js', import.meta.url).href;
+  const code = `
+    const { classify } = await import(${JSON.stringify(url)});
+    const { DEFAULT_RULES, DEFAULT_SETUP } = await import(${JSON.stringify(defs)});
+    const rules = {};
+    for (const r of Object.keys(DEFAULT_RULES)) rules[r] = [${JSON.stringify(pattern)}];
+    const t = performance.now();
+    classify('a'.repeat(4000) + '!', rules, DEFAULT_SETUP);
+    process.stdout.write(String(performance.now() - t));`;
+  const res = spawnSync(process.execPath, ['--input-type=module', '-e', code], { timeout: 1500, encoding: 'utf8' });
+  return res.status === 0 ? Number(res.stdout) : Infinity;
+}
+
+const REDOS = ['a*a*a*a*a*a*b', '(a+)+$', '(a|aa)+$', '(.*)*x', '\\w*\\w*\\w*x', '(a|a)*b', '(a+)?(a+)?(a+)?b', '(a?){20}a{20}'];
+for (const pattern of REDOS) {
+  test(`M2: user rule ${pattern} classifies 4000 chars in under 50 ms`, { timeout: 2000 }, () => {
+    const ms = timedInChild(pattern);
+    assert.ok(ms < 50, `took ${ms} ms`);
+  });
+}
+
+test('M2: a user phrase matches as words, with any whitespace between them', () => {
+  assert.equal(writes('when is the next release train', ['release train']), true);
+  assert.equal(writes('when is the next Release\n  Train?', ['release train']), true);
+  assert.equal(writes('releasetrain is late', ['release train']), false);
+  assert.equal(writes('the train is late', ['rain']), false);
+});
+
+test('M2: a user phrase is literal text, not a regex', () => {
+  const plan = classify('fix the c++ build', { ...DEFAULT_RULES, plan: ['c++'] }, DEFAULT_SETUP);
+  assert.equal(plan?.role, 'plan');
+  assert.equal(plan?.why, 'c++');
+  assert.equal(writes('fix the abc++ build', ['c++']), false);
+  assert.equal(writes('fix the cc build', ['c++']), false);
+  assert.equal(writes('axb', ['a.b']), false);
+  assert.equal(writes('see a.b here', ['a.b']), true);
+  assert.equal(writes('tell me about the zebra', ['\\bzebra\\b']), false);
+  assert.equal(writes('ping #ops now', ['#ops']), true);
+  assert.equal(writes('(unclosed it', ['(unclosed']), true);
+});
+
+test('M2: a user phrase longer than 200 characters is skipped', () => {
+  const long = `zebra ${'q'.repeat(195)}`;
+  assert.ok(long.length > 200);
+  assert.equal(writes(long, [long]), false);
+  const ok = `zebra ${'q'.repeat(190)}`;
+  assert.equal(writes(ok, [ok]), true);
+});
+
+test('M2: only the first 50 user phrases of a role are used', () => {
+  const sixty = Array.from({ length: 60 }, (_, i) => `word${i}`);
+  assert.equal(writes('word10', sixty), true);
+  assert.equal(writes('word49', sixty), true);
+  assert.equal(writes('word55', sixty), false);
+});
+
+test('M2: user phrases only see the first 1000 characters; default rules still see 4000', () => {
+  const pad = 'lorem ipsum '.repeat(150); // 1800 chars of nothing
+  assert.equal(writes(`${pad} zebra`, ['zebra']), false);
+  assert.equal(writes(`zebra ${pad}`, ['zebra']), true);
+  assert.equal(role(`${pad} debug it`), 'hard');
+});
+
+test('M2: a pattern identical to a default rule keeps the default treatment', () => {
+  const own = DEFAULT_RULES.code.find(p => p.includes('( \\w+)?'));
+  assert.ok(own);
+  assert.equal(classify('update the trip status field', { ...DEFAULT_RULES, code: [own] }, DEFAULT_SETUP)?.role, 'code');
+});
+
+test('M2: the rules.json that `claude-model-router rules` writes routes exactly like the built-in rules', () => {
+  const written = JSON.parse(JSON.stringify(DEFAULT_RULES, null, 2));
+  for (const [prompt] of [...cases, ...realWorld, ...notChores]) {
+    assert.deepEqual(classify(prompt, written, DEFAULT_SETUP), c(prompt), prompt);
+  }
+});
+
+test('M2: every default rule still compiles and is used', () => {
+  for (const [r, list] of Object.entries(DEFAULT_RULES)) {
+    for (const src of list) assert.doesNotThrow(() => new RegExp(src, 'i'), `${r}: ${src}`);
+  }
+});
+
+// ---- L1: overrides count only at the start or the end of the prompt ----
+
+test('L1: a tag at the start or at the end is honoured', () => {
+  assert.equal(c('#chores rename foo and explain the design').role, 'chores');
+  assert.equal(c('explain the whole design here #chores').role, 'chores');
+  assert.equal(c('explain the whole design here #chores.').forced, true);
+  assert.equal(c('  \n@haiku summarize this').role, 'chores');
+  assert.equal(c('debug the parser crash @haiku\n').role, 'chores');
+  assert.equal(c('plan this out #self'), null);
+});
+
+test('L1: a tag in the middle is ignored', () => {
+  assert.equal(c('debug the crash #chores in the parser').role, 'hard');
+  assert.equal(c('debug the crash in the parser, see @haiku notes above').role, 'hard');
+  assert.notEqual(c('please #self review the diff'), null);
+});
+
+test('L1: @haiku inside a pasted log does not downgrade the prompt', () => {
+  const p = 'debug this crash, here is the log:\n```\n12:01 worker started\n12:02 @haiku job queued\n12:03 segfault\n```\nwhat broke?';
+  const r = c(p);
+  assert.equal(r.role, 'hard');
+  assert.equal(r.forced, false);
+});
+
+test('L1: plain-language overrides count only in the first 200 characters', () => {
+  assert.equal(c('use haiku for this: tidy the imports').forced, true);
+  assert.equal(c('do it yourself: fix the bug'), null);
+  const pad = 'the parser crashes on empty input and I need a fix soon. '.repeat(5);
+  assert.ok(pad.length > 200);
+  assert.notEqual(c(`${pad} use haiku for this`)?.forced, true);
+  assert.notEqual(c(`${pad} do it yourself`), null);
+});
+
+// ---- L4: why is clean text, at most 40 characters ----
+
+test('L4: why carries no control bytes from the prompt and is capped at 40', () => {
+  const r = c('why does \x1b]0;evil title\x07 the \x1b[2J upload fail when the network is slow and long');
+  assert.equal(r.role, 'hard');
+  assert.doesNotMatch(r.why, /[\x00-\x1f\x7f]/);
+  assert.ok(r.why.length <= 40, r.why);
+});
+
+test('L1: why of an end tag leaves out the trailing punctuation', () => {
+  assert.equal(c('explain the whole design here #chores.').why, '#chores');
+  assert.equal(c('explain the whole design here @haiku!').why, '@haiku');
 });

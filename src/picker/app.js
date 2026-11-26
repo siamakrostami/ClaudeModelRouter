@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { render, Box, Text, useInput, useApp } from 'ink';
 import { ROLES, MODELS, EFFORTS, ROLE_INFO } from '../core/defaults.js';
 import * as store from '../core/store.js';
+import { clean } from '../core/safe.js';
 
 const h = React.createElement;
 
@@ -18,7 +19,7 @@ function Header({ s }) {
   return h(Box, { borderStyle: 'round', borderColor: 'gray', paddingX: 1, justifyContent: 'space-between' },
     h(Text, null, h(Text, { bold: true, color: 'whiteBright' }, '⇢ Claude Model Router'), h(Text, { color: 'gray' }, '  model routing for Claude Code')),
     h(Text, null,
-      h(Text, { color: 'gray' }, 'setup '), h(Text, { bold: true, color: 'blueBright' }, s.active),
+      h(Text, { color: 'gray' }, 'setup '), h(Text, { bold: true, color: 'blueBright' }, clean(s.active, 40)),
       h(Text, { color: 'gray' }, '   routing '),
       h(Text, { bold: true, color: s.enabled ? 'greenBright' : 'redBright' }, s.enabled ? 'ON' : 'OFF')));
 }
@@ -46,14 +47,14 @@ function Footer({ mode, input, s, listCursor, toast }) {
   const key = (k, label) => h(Text, null, h(Text, { color: 'blueBright', bold: true }, k), h(Text, { color: 'gray' }, ` ${label}   `));
   let body;
   if (mode === 'save') {
-    body = h(Text, null, h(Text, { color: 'gray' }, 'Save setup as: '), h(Text, { color: 'whiteBright' }, input), h(Text, { color: 'blueBright' }, '█'),
+    body = h(Text, null, h(Text, { color: 'gray' }, 'Save setup as: '), h(Text, { color: 'whiteBright' }, clean(input, 40)), h(Text, { color: 'blueBright' }, '█'),
       h(Text, { color: 'gray' }, '   enter save · esc cancel'));
   } else if (mode === 'load' || mode === 'delete') {
     body = h(Box, { flexDirection: 'column' },
       h(Text, { color: 'gray' }, mode === 'load' ? 'Load setup (enter load · esc cancel):' : 'Delete setup (enter delete · esc cancel):'),
       ...s.names.map((n, i) => h(Text, { key: n },
         h(Text, { color: 'blueBright' }, i === listCursor ? '❯ ' : '  '),
-        h(Text, { color: n === s.active ? 'blueBright' : undefined, bold: i === listCursor }, n),
+        h(Text, { color: n === s.active ? 'blueBright' : undefined, bold: i === listCursor }, clean(n, 40)),
         n === s.active ? h(Text, { color: 'gray' }, '  (active)') : null)));
   } else {
     body = h(Text, null, key('↑↓', 'role'), key('←→', 'model'), key('e', 'effort'), key('s', 'save'), key('l', 'load'),
@@ -61,7 +62,7 @@ function Footer({ mode, input, s, listCursor, toast }) {
   }
   return h(Box, { flexDirection: 'column', paddingX: 1, marginTop: 1 },
     body,
-    toast ? h(Text, { color: toast.error ? 'redBright' : 'greenBright' }, toast.text) : h(Text, null, ' '));
+    toast ? h(Text, { color: toast.error ? 'redBright' : 'greenBright' }, clean(toast.text, 200)) : h(Text, null, ' '));
 }
 
 function App() {

@@ -60,13 +60,16 @@ and the same `claude plugin install` line. Needs Claude Code 2.1.330 or newer.
 
 ## Use
 
-Just type. To steer one prompt, include one of these:
+Just type. To steer one prompt, put one of these at the start or end of the prompt:
 
 - `#plan` `#review` `#hard` `#code` `#write` `#chores`: force a role
-- `@fable` `@opus` `@sonnet` `@haiku`, or "use haiku for this", "use opus to ...",
-  "with sonnet please": force a model. A model named in passing ("we run the job on haiku")
-  does not.
-- `#self` or "do it yourself": stay on the session's model
+- `@fable` `@opus` `@sonnet` `@haiku`: force a model
+- `#self`: stay on the session's model
+
+A tag in the middle of the prompt (say, inside a pasted log) is ignored. The plain-language
+forms work in the first 200 characters: "use haiku for this", "use opus to ...", "with sonnet
+please" force a model, and "do it yourself" stays on the session's model. A model named in
+passing ("we run the job on haiku") does not count.
 
 In a session:
 
@@ -93,33 +96,60 @@ claude-model-router rules                # write the default rules to rules.json
 
 ## Data and custom rules
 
-Data lives in `~/.claude/claude-model-router/` (on Windows, under `%USERPROFILE%`; set
-`CLAUDE_MODEL_ROUTER_HOME` to use another folder):
+Data lives in `~/.claude/claude-model-router/` (on Windows, under `%USERPROFILE%`). The CLI
+also honours `CLAUDE_MODEL_ROUTER_HOME` (an absolute path) for your own use and for tests; the
+mod ignores it and always uses the folder under your home.
 
 - `setups.json`: the saved setups, the active one, and the global on/off. The CLI and the pane
   both edit it; a pane edit re-reads the file first, so a setup saved from the CLI is kept. A file
-  that does not parse is copied to `setups.json.bak` before it is replaced.
+  that does not parse is copied to `setups.json.bak-<time>` before it is replaced (never through a
+symlink, and never over an older backup). Setup names use letters, digits, `-`, `_` and `.`
+(up to 40); other names in the file are ignored.
 - `rules.json` (optional): your own keyword rules. Without it the built-in rules are used.
 
 To customize the rules, run `claude-model-router rules`. It writes the built-in rules to
 `rules.json` (it never overwrites one that exists) and prints the path. The file maps each role
-to a list of case-insensitive regular expressions:
+to a list of entries:
 
 ```json
 {
-  "write": ["pr description", "\\bslack\\b", "\\bchangelog\\b"],
-  "chores": ["commit message", "\\brename"]
+  "write": ["pr description", "slack", "release train"],
+  "chores": ["commit message", "c++ build"]
 }
 ```
 
-- A role you list uses your patterns instead of the built-in ones; a role you leave out keeps
-  the built-in ones. A pattern that is not a valid regex is skipped.
-- Each pattern that matches adds 1 to its role. The highest score wins; a tie goes to the more
+- Your own entries are plain words or phrases, not regular expressions. They match whole words,
+  ignore case, and allow any spacing between words: `release train` matches "the next Release
+  Train" but not "releasetrain", and `c++` matches "c++" literally.
+- The built-in entries that `claude-model-router rules` writes are regular expressions and keep
+  working exactly as before, as long as each one is left unchanged. Edit one and it becomes a
+  plain phrase.
+- A role you list uses your entries instead of the built-in ones; a role you leave out keeps
+  the built-in ones.
+- Your own entries are skipped when longer than 200 characters. At most 50 per role are used,
+  and they look at the first 1000 characters of the prompt (built-in rules look at 4000).
+- Each entry that matches adds 1 to its role. The highest score wins; a tie goes to the more
   capable role (plan, review, hard, code, write, chores in that order).
 - Chores (Haiku, low effort by default) only win when no other role matched and the prompt is
   short (12 words or fewer) or opens with a mechanical verb such as rename, bump, move, format,
   lint or "write a commit message".
 - Changes apply from the next prompt; no restart needed.
+
+## Security notes
+
+- The mod makes no network calls and spawns no processes.
+- The plugin reads only two environment variables, `HOME` and `USERPROFILE`, and uses the first
+  that is an absolute path; with neither it uses the built-in defaults and writes nothing.
+  `CLAUDE_MODEL_ROUTER_HOME` is CLI-only, so a repo's `.claude/settings.json` cannot point the
+  plugin at files the repo controls.
+- Your own rules are plain phrases, never regular expressions, so a rules file cannot make a
+  prompt hang.
+- Known limit: if a project's settings change `HOME` itself, the plugin follows it. That can
+  only change which of the four model names and five effort levels are used (values are
+  validated); it cannot run code, read other files, or hang.
+- Names, folder and branch names, and words quoted from a prompt are shown with control
+  characters removed.
+- The text of a prompt you type while a turn runs is not kept; only a short hash of it is.
 
 ## Test
 

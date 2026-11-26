@@ -1,5 +1,6 @@
 import { ROLES, ROLE_INFO } from './core/defaults.js';
 import * as store from './core/store.js';
+import { clean } from './core/safe.js';
 
 const USAGE = `Usage: claude-model-router [command]
 
@@ -20,24 +21,40 @@ Models: fable, opus, sonnet, haiku    Efforts: low, medium, high, xhigh, max
 function showText() {
   const s = store.activeSetup();
   const on = store.loadSetups().enabled;
-  const lines = [`Setup: ${store.activeName()}${on ? '' : '   (routing OFF)'}`, ''];
+  const lines = [`Setup: ${clean(store.activeName(), 40)}${on ? '' : '   (routing OFF)'}`, ''];
   for (const r of ROLES) {
     lines.push(`${r.padEnd(8)} ${s[r].model.padEnd(8)} ${s[r].effort.padEnd(7)} ${ROLE_INFO[r]}`);
   }
   return lines.join('\n') + '\n';
 }
 
-/** Run the CLI. io = {stdout, stderr, isTTY}. Returns the exit code. */
+const NAMED = { save: '<name>', use: '<setup>', delete: '<setup>' };
+
+/**
+ * Run the CLI. io = {stdout, stderr, isTTY, loadPicker?}. Returns the exit code.
+ * loadPicker imports the Ink picker; tests pass one that fails.
+ */
 export async function main(argv, io = { stdout: process.stdout, stderr: process.stderr, isTTY: process.stdout.isTTY && process.stdin.isTTY }) {
   const [cmd, ...rest] = argv.filter(a => a !== '');
   const out = s => io.stdout.write(s);
+  if (Object.hasOwn(NAMED, cmd ?? '') && rest[0] === undefined) {
+    io.stderr.write(`Usage: claude-model-router ${cmd} ${NAMED[cmd]}\n`);
+    return 2;
+  }
   try {
     switch (cmd) {
       case undefined:
         if (io.isTTY) {
-          const { runPicker } = await import('./picker/app.js');
-          await runPicker();
-          return 0;
+          let picker = null;
+          try {
+            picker = await (io.loadPicker ?? (() => import('./picker/app.js')))();
+          } catch (e) {
+            io.stderr.write(`The interactive picker could not load (${clean(e?.message, 80)}); showing the setup instead.\n`);
+          }
+          if (picker) {
+            await picker.runPicker();
+            return 0;
+          }
         }
         out(showText());
         return 0;
@@ -46,7 +63,7 @@ export async function main(argv, io = { stdout: process.stdout, stderr: process.
         return 0;
       case 'list': {
         const { active, names } = store.listSetups();
-        out(names.map(n => `${n === active ? '*' : ' '} ${n}`).join('\n') + '\n');
+        out(names.map(n => `${n === active ? '*' : ' '} ${clean(n, 40)}`).join('\n') + '\n');
         return 0;
       }
       case 'use':
@@ -59,11 +76,11 @@ export async function main(argv, io = { stdout: process.stdout, stderr: process.
         return 0;
       case 'save':
         store.saveAs(rest[0]);
-        out(`Saved and switched to "${rest[0]}".\n`);
+        out(`Saved and switched to "${clean(rest[0], 40)}".\n`);
         return 0;
       case 'delete':
         store.remove(rest[0]);
-        out(`Deleted "${rest[0]}".\n`);
+        out(`Deleted "${clean(rest[0], 40)}".\n`);
         return 0;
       case 'on':
       case 'off':
@@ -77,7 +94,7 @@ export async function main(argv, io = { stdout: process.stdout, stderr: process.
       case 'rules': {
         const { path, created } = store.writeDefaultRules();
         out(created
-          ? `Wrote the default rules to ${path}\nEdit the regexes per role; new sessions and the next prompt pick them up.\n`
+          ? `Wrote the default rules to ${path}\nAdd plain words or phrases per role (the built-in entries are regexes; keep them as they are); new sessions and the next prompt pick them up.\n`
           : `${path} already exists; edit it (delete it and run this again to start from the defaults).\n`);
         return 0;
       }
@@ -87,11 +104,11 @@ export async function main(argv, io = { stdout: process.stdout, stderr: process.
         out(USAGE);
         return 0;
       default:
-        io.stderr.write(`Unknown command "${cmd}".\n\n${USAGE}`);
+        io.stderr.write(`Unknown command "${clean(cmd, 40)}".\n\n${USAGE}`);
         return 2;
     }
   } catch (e) {
-    io.stderr.write(`${e.message}\n`);
+    io.stderr.write(`${clean(e.message, 400)}\n`);
     return 2;
   }
 }

@@ -24,8 +24,11 @@ export type TurnRoute = Route & { turnId: string }
 /** A route decided at submit, waiting for its turn to start. */
 export type Pending = { route: Route | null }
 
-/** A prompt typed while a turn ran, routed for the turn it may start later. */
-export type Queued = { text: string; route: Route }
+/**
+ * A prompt typed while a turn ran, routed for the turn it may start later. `hash` is the
+ * fingerprint (FNV-1a 32-bit hex plus length) of its trimmed text; the text itself is not kept.
+ */
+export type Queued = { hash: string; route: Route }
 
 /** The model and effort the last main-chat request actually went out with. */
 export type Live = { model: string; effort: string }

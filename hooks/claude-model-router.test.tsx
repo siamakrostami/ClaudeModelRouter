@@ -21,7 +21,7 @@ const SETUPS = `${DIR}/setups.json`
  * Stand in for the engine: an in-memory disk (empty unless `files` says otherwise), the
  * session's model, and the bottom of turn.step that records what each request went out with.
  */
-function engine(on: any, opts: { model?: string; files?: Record<string, string>; env?: Record<string, string> } = {}) {
+function engine(on: any, opts: { model?: string; files?: Record<string, string>; env?: Record<string, string>; drop?: (text: string) => boolean } = {}) {
   const current = { model: opts.model ?? 'claude-fable-5' }
   const files: Record<string, string> = { ...(opts.files ?? {}) }
   const sent: { model: string; effort: unknown; agentId?: string }[] = []
@@ -38,7 +38,7 @@ function engine(on: any, opts: { model?: string; files?: Record<string, string>;
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('session.start', (_: any, e: any) => ({ cwd: e.cwd }))
   on('session.model', () => ({ value: current.model }))
-  on('prompt.submit', (_: any, e: any) => e)
+  on('prompt.submit', (_: any, e: any) => (opts.drop?.(e.text) ? { drop: 'blocked beneath' } : e))
   on('turn.start', (_: any, e: any) => ({ turnId: e.turnId }))
   on('turn.complete', (_: any, e: any) => ({ text: e.answer }))
   on('turn.step', async function* (_: any, e: any) {
@@ -318,13 +318,15 @@ test('a corrupt setups.json: defaults are used, and the first save backs it up',
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await turn($, 'rename foo to bar', 't1')
   expect(sent[0]).toEqual({ model: 'haiku', effort: 'low', agentId: undefined })
-  expect(files[`${SETUPS}.bak`]).toBeUndefined()
+  expect(Object.keys(files).filter(f => f.includes('.bak'))).toEqual([])
 
   const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await pane.press({ key: 'tab-routes' })
   await pane.select({ key: 'model-chores', value: 'sonnet' })
   await pane.unmount()
-  expect(files[`${SETUPS}.bak`]).toBe('{not json')
+  const baks = Object.keys(files).filter(f => /\/setups\.json\.bak-\d+$/.test(f))
+  expect(baks).toHaveLength(1)
+  expect(files[baks[0] as string]).toBe('{not json')
   expect(JSON.parse(files[SETUPS] ?? '{}').setups.default.chores).toEqual({ model: 'sonnet', effort: 'low' })
 })
 
@@ -354,7 +356,7 @@ test('enabled: false in setups.json turns routing off until the pane turns it on
 })
 
 test('rules.json replaces the rules of the roles it names', async ($: any, on: any) => {
-  const { sent } = engine(on, { files: { [`${DIR}/rules.json`]: JSON.stringify({ write: ['\\bzebra\\b'] }) } })
+  const { sent } = engine(on, { files: { [`${DIR}/rules.json`]: JSON.stringify({ write: ['zebra'] }) } })
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await turn($, 'tell me about the zebra', 't1')
   await turn($, 'rename foo to bar', 't2')
@@ -403,4 +405,205 @@ test('a long branch is cut to fit the band, and hidden when the band is narrow',
     expect(await narrow.find({ key: 'pin' })).toBeDefined()
     await narrow.unmount()
   }
+})
+
+/** Save one pane edit and report which setups.json the mod wrote. */
+async function writtenWith($: any, on: any, env: Record<string, string>, files: Record<string, string> = {}) {
+  const disk = engine(on, { env, files })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await pane.press({ key: 'tab-routes' })
+  await pane.select({ key: 'model-code', value: 'opus' })
+  await pane.unmount()
+  return disk
+}
+
+const OWN = '/home/test/.claude/claude-model-router/setups.json'
+
+// The mod never reads CLAUDE_MODEL_ROUTER_HOME: a project's .claude/settings.json can set the
+// session's env, so the data folder is always <HOME or USERPROFILE>/.claude/claude-model-router.
+const OVERRIDES = ['repo/.cmr', '/home/test/../../tmp/cmr', '/tmp/cmr', '/home/testevil/cmr', '/home/test/custom', '/home/test/custom/']
+for (const custom of OVERRIDES) {
+  test(`M1: the mod ignores CLAUDE_MODEL_ROUTER_HOME=${custom}`, async ($: any, on: any) => {
+    const theirs = { [`${custom.replace(/\/$/, '')}/rules.json`]: JSON.stringify({ chores: ['zebra'] }) }
+    const { files, sent } = await writtenWith($, on, { HOME: '/home/test', CLAUDE_MODEL_ROUTER_HOME: custom }, theirs)
+    expect(Object.keys(files).filter(f => f.endsWith('setups.json'))).toEqual([OWN])
+    await turn($, 'tell me about the zebra', 't1')
+    expect(sent[0]?.model).toBe('claude-fable-5') // the other folder's rules.json was not read
+  })
+}
+
+test('M1: the default folder under HOME is used', async ($: any, on: any) => {
+  const { files } = await writtenWith($, on, { HOME: '/home/test' })
+  expect(Object.keys(files)).toEqual([OWN])
+})
+
+test('M1: a Windows USERPROFILE is used, an override beside it is not', async ($: any, on: any) => {
+  const { files } = await writtenWith($, on, { USERPROFILE: 'C:\\Users\\win', CLAUDE_MODEL_ROUTER_HOME: 'C:\\Users\\win\\cmr' })
+  // the test kit runs on POSIX and resolves a drive path against its cwd, so match the end
+  expect(Object.keys(files)).toHaveLength(1)
+  expect(Object.keys(files)[0]).toEndWith('C:\\Users\\win/.claude/claude-model-router/setups.json')
+})
+
+test('M1: with no home folder nothing is written, even with an override', async ($: any, on: any) => {
+  const { files } = await writtenWith($, on, { CLAUDE_MODEL_ROUTER_HOME: '/tmp/cmr' })
+  expect(Object.keys(files)).toEqual([])
+})
+
+test('M1: a relative HOME writes nothing, and routing still works', async ($: any, on: any) => {
+  const { files, sent } = await writtenWith($, on, { HOME: 'repo' })
+  expect(Object.keys(files)).toEqual([])
+  await turn($, 'rename foo to bar', 't1')
+  expect(sent[0]?.model).toBe('haiku')
+})
+
+test('M1: a relative HOME falls back to an absolute USERPROFILE', async ($: any, on: any) => {
+  const { files } = await writtenWith($, on, { HOME: 'repo', USERPROFILE: '/Users/win' })
+  expect(Object.keys(files)).toEqual(['/Users/win/.claude/claude-model-router/setups.json'])
+})
+
+// ---- L2: the mod's backup never follows a symlink ----
+
+test('L2: a symlink at the backup name is not written through', async ($: any, on: any) => {
+  const { files } = engine(on, { files: { [SETUPS]: '{not json' } })
+  on('fs.stat', (_: any, e: any) => {
+    if (/\.bak-\d+$/.test(e.path)) return { value: { kind: 'file', size: 1, mtimeMs: 0, isLink: true } }
+    throw new Error('ENOENT')
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await pane.press({ key: 'tab-routes' })
+  await pane.select({ key: 'model-chores', value: 'sonnet' })
+  await pane.unmount()
+  expect(Object.keys(files).filter(f => f.includes('.bak'))).toEqual([])
+  expect(JSON.parse(files[SETUPS] ?? '{}').setups.default.chores).toEqual({ model: 'sonnet', effort: 'low' })
+})
+
+// ---- L3: setup names are own keys only ----
+
+test('L3: an active name that is a prototype key falls back to the first setup', async ($: any, on: any) => {
+  const fast = { code: { model: 'haiku', effort: 'low' } }
+  const { sent } = engine(on, { files: { [SETUPS]: JSON.stringify({ active: 'toString', setups: { fast, default: {} } }) } })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await pane.press({ key: 'tab-routes' })
+  expect(await pane.find({ type: 'Text', text: /MODELS · FAST/ })).toBeDefined()
+  await pane.select({ key: 'model-plan', value: 'opus' }) // the dropdowns work again
+  await pane.unmount()
+  await turn($, 'implement the trips endpoint', 't1')
+  expect(sent[0]).toEqual({ model: 'haiku', effort: 'low', agentId: undefined })
+})
+
+test('L3: __proto__, constructor and bad names in setups.json are not offered', async ($: any, on: any) => {
+  const text = '{"active":"default","setups":{"__proto__":{},"constructor":{},"bad name":{},"default":{},"fast":{}}}'
+  const { files } = engine(on, { files: { [SETUPS]: text } })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await pane.press({ key: 'tab-routes' })
+  const select = await pane.find({ key: 'setup' })
+  expect((select?.props.options as any[]).map(o => o.value)).toEqual(['default', 'fast'])
+  await pane.select({ key: 'setup', value: 'fast' })
+  expect(JSON.parse(files[SETUPS] ?? '{}').active).toBe('fast')
+  await pane.unmount()
+})
+
+// ---- L4: text from a folder, a branch or a prompt is drawn without control bytes ----
+
+const CONTROL = /[\x00-\x1f\x7f]/
+
+test('L4: a folder name with escape sequences is drawn clean', async ($: any, on: any) => {
+  engine(on)
+  on('session.cwd', () => ({ value: '/work/my-\x1b[31mrepo' }))
+  await $.session.start({ cwd: '/work/r', surface: 'terminal', isInteractive: true })
+  for (const surface of SURFACES) {
+    const band = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns: 160 }, surface })
+    const text = (await band.find({ type: 'Text', text: /repo/ }))?.text ?? ''
+    expect(text).toMatch(/^my- ?\[31mrepo$/)
+    expect(text).not.toMatch(CONTROL)
+    await band.unmount()
+  }
+})
+
+test('L4: a branch name with escape sequences is drawn clean', async ($: any, on: any) => {
+  engine(on)
+  on('session.cwd', () => ({ value: '/work/my-repo' }))
+  on('vcs.detect', () => ({ vcs: 'git', root: '/work/my-repo', mainRoot: '/work/my-repo', revision: 'abc', branch: 'fe\x1b]0;pwned\x07at', defaultBranch: 'main', remote: null }))
+  await $.session.start({ cwd: '/work/r', surface: 'terminal', isInteractive: true })
+  for (const surface of SURFACES) {
+    const band = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns: 160 }, surface })
+    const text = (await band.find({ type: 'Text', text: /repo/ }))?.text ?? ''
+    expect(text).toMatch(/^my-repo \| fe ?\]0;pwned ?at$/)
+    expect(text).not.toMatch(CONTROL)
+    await band.unmount()
+  }
+})
+
+test('L4: the why in the pane carries no control bytes from the prompt', async ($: any, on: any) => {
+  engine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.prompt.submit({ text: 'why does \x1b]0;evil\x07 the upload fail' })
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const why = (await pane.find({ type: 'Text', text: /←/ }))?.text ?? ''
+  expect(why).toMatch(/← why does/)
+  expect(why).not.toMatch(CONTROL)
+  await pane.unmount()
+})
+
+// ---- L5: a queued prompt is kept as a fingerprint, never as text ----
+
+test('L5: plugin state holds a hash of a queued prompt, not its text', async ($: any, on: any) => {
+  const { sent } = engine(on)
+  const writes: any[] = []
+  on('state.set', ($s: any, e: any, next: any) => {
+    if (e.plugin === 'model-router' && e.key === 'queued') writes.push(e.value)
+    return next(e)
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.prompt.submit({ text: 'rename foo to bar' })
+  await $.turn.start({ text: 'rename foo to bar', turnId: 't1' })
+  const secret = 'debug the crash, token sk-live-12345'
+  await $.prompt.submit({ text: secret, turnId: 't1', wait: true, origin: { kind: 'composer' } })
+  const q = JSON.stringify(writes.filter(Boolean))
+  expect(q).toContain('"route"')
+  expect(q).not.toContain('sk-live')
+  expect(q).toMatch(/"hash":"[0-9a-f]{8}:\d+"/)
+  await $.turn.complete({ turnId: 't1', reason: 'answer', answer: '', durationMs: 1, isAborted: false })
+  // a different later turn does not take it; the matching one does
+  await $.turn.start({ text: 'something else', turnId: 't2' })
+  await step($, 't2')
+  await $.turn.complete({ turnId: 't2', reason: 'answer', answer: '', durationMs: 1, isAborted: false })
+  await $.turn.start({ text: `  ${secret}\n`, turnId: 't3' })
+  await step($, 't3')
+  expect(sent.map(s => s.model)).toEqual(['claude-fable-5', 'opus'])
+})
+
+// ---- I4: a route decided at a submit that starts no turn is not bound to a later turn ----
+
+test('I4: a dropped submit leaves no route for the next turn', async ($: any, on: any) => {
+  const { sent } = engine(on, { drop: t => t.startsWith('debug') })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.prompt.submit({ text: 'debug the crash in the parser' })
+  await $.turn.start({ text: '', turnId: 't1' }) // a continuation, no submit of its own
+  await step($, 't1')
+  expect(sent[0]?.model).toBe('claude-fable-5')
+})
+
+test('I4: a pending route does not outlive a turn.complete', async ($: any, on: any) => {
+  const { sent } = engine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.prompt.submit({ text: 'debug the crash in the parser' }) // starts no turn
+  await $.turn.complete({ turnId: 't0', reason: 'answer', answer: '', durationMs: 1, isAborted: false })
+  await $.turn.start({ text: '', turnId: 't1' })
+  await step($, 't1')
+  expect(sent[0]?.model).toBe('claude-fable-5')
+})
+
+test('I4: a new submit replaces the pending route', async ($: any, on: any) => {
+  const { sent } = engine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.prompt.submit({ text: 'debug the crash in the parser' })
+  await $.prompt.submit({ text: 'rename foo to bar' })
+  await $.turn.start({ text: 'rename foo to bar', turnId: 't1' })
+  await step($, 't1')
+  expect(sent[0]?.model).toBe('haiku')
 })
