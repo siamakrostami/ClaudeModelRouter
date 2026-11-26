@@ -1,0 +1,9 @@
+{
+  "name": "switchboard",
+  "description": "Automatic model routing: Fable plans and reviews, Opus does hard code and UI, Sonnet does regular code and writing, Haiku does chores. Setups are saved and switchable with the switchboard CLI.",
+  "version": "0.1.0",
+  "author": { "name": "Siamak Rostami" },
+  "repository": "https://github.com/siamakrostami/switchboard",
+  "license": "MIT",
+  "keywords": ["model", "routing", "subagents", "fable", "opus", "sonnet", "haiku"]
+}

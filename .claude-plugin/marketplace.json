@@ -1,0 +1,14 @@
+{
+  "name": "switchboard",
+  "owner": {
+    "name": "Siamak Rostami"
+  },
+  "plugins": [
+    {
+      "name": "switchboard",
+      "source": "./",
+      "description": "Automatic model routing for Claude Code with saved setups."
+    }
+  ],
+  "description": "Switchboard: automatic model routing for Claude Code with saved setups."
+}

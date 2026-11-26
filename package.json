@@ -1,0 +1,43 @@
+{
+  "name": "cc-switchboard",
+  "version": "0.1.0",
+  "description": "Automatic model routing for Claude Code: Fable plans and reviews, Opus does hard code, Sonnet does regular code and writing, Haiku does chores.",
+  "type": "module",
+  "bin": {
+    "switchboard": "bin/switchboard.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test test/"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "ink": "^5.2.1",
+    "react": "^18.3.1"
+  },
+  "files": [
+    "bin",
+    "src",
+    "hooks",
+    "agents",
+    "commands",
+    ".claude-plugin",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/siamakrostami/switchboard.git"
+  },
+  "keywords": [
+    "claude-code",
+    "claude",
+    "model-routing",
+    "plugin",
+    "fable",
+    "opus",
+    "sonnet",
+    "haiku"
+  ]
+}
