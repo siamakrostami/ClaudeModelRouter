@@ -22,6 +22,9 @@ export type Route = {
 /** The model and effort the last main-chat request actually went out with. */
 export type Live = { model: string; effort: string }
 
+/** Where the session is: project folder name, git branch, context window used. */
+export type Place = { project: string; branch: string | null; ctx: number | null }
+
 declare module 'claude-code' {
   interface PluginState {
     switchboard: {
@@ -32,6 +35,8 @@ declare module 'claude-code' {
       manual: string | null
       pin: string | null
       tab: string
+      place: Place | null
+      base: string | null
     }
   }
 }

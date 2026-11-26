@@ -1,6 +1,6 @@
 {
   "name": "cc-switchboard",
-  "version": "0.2.0",
+  "version": "0.2.10",
   "description": "Per-turn model routing for Claude Code: each prompt runs on the right model and effort, with a band above the prompt and a /router pane.",
   "keywords": [
     "claude-code",
@@ -33,7 +33,8 @@
     "types",
     ".claude-plugin",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "!hooks/*.test.tsx"
   ],
   "engines": {
     "node": ">=20"

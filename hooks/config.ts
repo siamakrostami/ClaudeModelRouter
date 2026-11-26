@@ -19,7 +19,7 @@ export function family(model: string | undefined) {
 
 export function meter(effort: string) {
   const level = Math.max(0, EFFORT_LIST.indexOf(effort)) + 1
-  return { on: '▮'.repeat(level), off: '▯'.repeat(EFFORT_LIST.length - level) }
+  return { on: '●'.repeat(level), off: '○'.repeat(EFFORT_LIST.length - level) }
 }
 
 function fill(setup: any): Setup {
