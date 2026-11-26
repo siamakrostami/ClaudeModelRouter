@@ -36,6 +36,7 @@ export const DEFAULT_RULES = {
     'how should (we|i) (build|structure|design|approach|organi[sz]e)',
     "what'?s the best (approach|way) to",
     'strategy for',
+    '\\b(whether|if) (we|i) should\\b',
   ],
   review: [
     '^\\W*(please |can you |could you )?review\\b',
@@ -45,6 +46,7 @@ export const DEFAULT_RULES = {
     'look over (my|this|the)',
     'check (my|this|the) (code|pr|diff) for',
     'is there (a|any) (bug|issue|problem)s? (in|with)',
+    'security (hole|issue|bug|flaw|problem|risk)|vulnerab',
   ],
   hard: [
     '\\bdebug',
@@ -64,6 +66,10 @@ export const DEFAULT_RULES = {
     'memory leak',
     'deadlock',
     '\\b(performance|too slow)\\b',
+    'figure out (why|what)',
+    '\\b(gone|lost|broken|broke|disappeared) after\\b',
+    '\\bafter (the|an|our|my) (upgrade|update|migration|rebase|merge)\\b',
+    '\\brecover (my|the|our|them|it|lost)\\b',
   ],
   code: [
     '\\bimplement',
@@ -78,6 +84,8 @@ export const DEFAULT_RULES = {
     'address (the )?(review )?comments',
     '\\b(pick up|start on|work on)\\b',
     '\\bupdate (the )?\\w+( \\w+)? (field|model|function|method|class|component|endpoint|view)\\b',
+    '\\brewrite\\b',
+    '\\badd (one|it|them)\\b',
     '\\bformat (the )?\\S+( \\S+)? as\\b',
   ],
   write: [
@@ -92,6 +100,8 @@ export const DEFAULT_RULES = {
     'daily update',
     'confluence (page|doc)',
     '(write|draft) (a |the )?(jira )?ticket',
+    '\\b(create|open|file|raise|log) (a |an |the )?(new )?(jira |github |linear )?(ticket|issue|bug report)\\b',
+    '\\b(ticket|issue|bug report) (for|about|describing)\\b',
     'write ?up\\b',
   ],
   chores: [
@@ -110,16 +120,3 @@ export const DEFAULT_RULES = {
     'summari[sz]e',
   ],
 };
-
-export const AGENT_PREFIX = 'claude-model-router:router-';
-
-export function agentName(role) {
-  return AGENT_PREFIX + role;
-}
-
-/** Map an Agent tool subagent_type to a role, accepting namespaced or bare names. */
-export function roleFromAgent(subagentType) {
-  if (typeof subagentType !== 'string') return null;
-  const m = /^(?:claude-model-router:)?router-([a-z]+)$/.exec(subagentType);
-  return m && ROLES.includes(m[1]) ? m[1] : null;
-}

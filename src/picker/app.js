@@ -127,7 +127,7 @@ function App() {
     h(Header, { s }),
     h(RoleTable, { s, cursor }),
     h(Footer, { mode, input, s, listCursor, toast }),
-    h(Text, { color: 'gray', dimColor: true }, '  Changes save instantly and apply to the next helper Claude starts.'));
+    h(Text, { color: 'gray', dimColor: true }, '  Changes save instantly and apply from the next prompt in every session.'));
 }
 
 export async function runPicker() {

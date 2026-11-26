@@ -1,8 +1,8 @@
 import { atom, read, update } from 'claude-code'
-import type { Register } from 'claude-code'
+import type { PromptSubmitInput, Register } from 'claude-code'
 
 import { classify } from '../src/core/classify.js'
-import type { Config, Live, Route, Setup } from '../types'
+import type { Config, Live, Place, Route, Setup } from '../types'
 import {
   EFFORT_LIST,
   MODEL_COLOR,
@@ -17,8 +17,15 @@ import {
 
 const PANE = 'claude-model-router'
 
-const config = atom({ plugin: 'model-router', key: 'config' } as const, null, { shape: 'config-1' })
-const route = atom({ plugin: 'model-router', key: 'route' } as const, null, { shape: 'route-1' })
+const config = atom({ plugin: 'model-router', key: 'config' } as const, null, { shape: 'config-2' })
+/** The route `turn.step` applies, bound to one turn by id and cleared when that turn completes. */
+const route = atom({ plugin: 'model-router', key: 'route' } as const, null, { shape: 'route-2' })
+/** The route of the person's latest turn, for the band and the pane to show. Never applied. */
+const last = atom({ plugin: 'model-router', key: 'last' } as const, null, { shape: 'last-1' })
+/** Decided at an idle submit; `turn.start` binds it to the turn that follows. */
+const pending = atom({ plugin: 'model-router', key: 'pending' } as const, null, { shape: 'pending-1' })
+/** A prompt typed while a turn ran: bound only to a later turn that starts with the same text. */
+const queued = atom({ plugin: 'model-router', key: 'queued' } as const, null, { shape: 'queued-1' })
 const live = atom({ plugin: 'model-router', key: 'live' } as const, null, { shape: 'live-1' })
 const paused = atom({ plugin: 'model-router', key: 'paused' } as const, false)
 const manual = atom({ plugin: 'model-router', key: 'manual' } as const, null)
@@ -33,15 +40,41 @@ async function reload($: any) {
   return cfg
 }
 
-/** Change the config, save it to setups.json and keep the atom in step. */
+/**
+ * Change the config, save it to setups.json and keep the atom in step. Starts from the file
+ * as it is now, so a change the CLI or another session made since is kept.
+ */
 async function edit($: any, fn: (cfg: Config) => Config) {
-  const cfg = fn(structuredClone((await read($, config)) ?? (await loadConfig($))))
+  const cfg = fn(structuredClone(await loadConfig($)))
   await saveConfig($, cfg)
   await update($, config, () => cfg)
 }
 
-/** Decide this turn's route from the prompt, a pin, or nothing (stay on the session's model). */
-async function decide($: any, text: string) {
+/** Pinned to a model: the effort of the first task that runs on it, else high. */
+function pinRoute(setup: Setup, pinned: string): Route {
+  const role = ROLE_LIST.find(r => setup[r]?.model === pinned) ?? 'code'
+  const effort = setup[role]?.model === pinned ? setup[role].effort : 'high'
+  return { role, model: pinned, effort, why: '', source: 'pin' }
+}
+
+/**
+ * Who a prompt is from. Only the person's own prompts are routed: typed (or queued) at the
+ * terminal, sent from Remote Control or the SDK host, or a plugin's submit made as their words.
+ * Notifications, schedules, peers and meta prompts run on the session's model. An absent origin
+ * is the person's (as `PromptSubmitResult` reads it).
+ */
+function fromPerson(e: PromptSubmitInput) {
+  if (e.isMeta) return false
+  const o = e.origin
+  if (!o) return true
+  return o.kind === 'composer' || o.kind === 'bridge' || o.kind === 'sdk' || (o.kind === 'plugin' && o.asUser === true)
+}
+
+/**
+ * Decide a turn's route from the prompt, a pin, or nothing (stay on the session's model).
+ * A slash command or skill is never classified; a pin still applies to it.
+ */
+async function decide($: any, text: string, isCommand: boolean) {
   const cfg = await reload($)
   const sessionModel = family(String(await $.session.model()))
   // Manual only when the model was changed with /model after the session started.
@@ -50,23 +83,20 @@ async function decide($: any, text: string) {
   const isManual = sessionModel !== '' && !!started && sessionModel !== started
   await update($, manual, () => (isManual ? sessionModel : null))
   if (!cfg.enabled || isManual || (await read($, paused))) return null
-  const setup = cfg.setups[cfg.active]
+  const setup: Setup = cfg.setups[cfg.active] ?? {}
   const pinned = await read($, pin)
-  if (pinned && MODEL_LIST.includes(pinned)) {
-    // Pinned to a model: use the effort of the first task that runs on it.
-    const role = ROLE_LIST.find(r => setup[r]?.model === pinned) ?? 'code'
-    const effort = setup[role]?.model === pinned ? setup[role].effort : 'high'
-    return { role, model: pinned, effort, why: '', source: 'pin' } as Route
-  }
+  if (pinned && MODEL_LIST.includes(pinned)) return pinRoute(setup, pinned)
+  if (isCommand) return null
   const r = classify(text, cfg.rules, setup)
   if (!r) return null
-  return { role: r.role, model: r.model, effort: r.effort, why: r.why, source: r.forced ? 'override' : 'auto' } as Route
+  return { role: r.role, model: r.model, effort: r.effort, why: r.why, source: 'auto' } as Route
 }
 
 /** Turn routing on or off from the pane. On also clears a saved "enabled: false". */
 async function power($: any, turnOn: boolean) {
   await update($, paused, () => !turnOn)
-  if (turnOn && (await read($, config))?.enabled === false) await edit($, c => ({ ...c, enabled: true }))
+  if (turnOn && (await loadConfig($)).enabled === false) await edit($, c => ({ ...c, enabled: true }))
+  else await reload($)
 }
 
 /** Set one task's model or effort in the active setup. */
@@ -80,24 +110,43 @@ async function setSlot($: any, role: string, field: 'model' | 'effort', value: s
 }
 
 type Mode = 'auto' | 'pinned' | 'main' | 'manual' | 'off'
+type View = { cfg: Config; last: Route | null; live: Live | null; paused: boolean; manual: string | null; pin: string | null; base: string | null }
 
-/** What the band and the pane both need: what this turn runs on, and in which mode. */
-function status(cfg: Config, r: Route | null, l: Live | null, isPaused: boolean, man: string | null) {
-  const mode: Mode = isPaused || !cfg.enabled ? 'off' : man ? 'manual' : r ? (r.source === 'pin' ? 'pinned' : 'auto') : 'main'
-  const routed = mode === 'auto' || mode === 'pinned'
-  const idle = l ?? { model: cfg.mainModel, effort: cfg.setups[cfg.active]?.plan?.effort ?? '' }
-  const shown = mode === 'manual' ? { model: man as string, effort: l?.effort ?? '' } : routed && r ? { model: r.model, effort: r.effort } : idle
+/**
+ * What the band and the pane both show: the route of the person's latest turn, or the pin,
+ * or what the last request went out with. Before any request: the model the session started
+ * on, with no effort (it is not known yet).
+ */
+function status(v: View) {
+  const { cfg, last: r, live: l, manual: man } = v
+  const pinned = v.pin && MODEL_LIST.includes(v.pin) ? pinRoute(cfg.setups[cfg.active] ?? {}, v.pin) : null
+  const mode: Mode = v.paused || !cfg.enabled ? 'off' : man ? 'manual' : pinned ? 'pinned' : r ? 'auto' : 'main'
+  const idle = l ?? { model: v.base ?? '', effort: '' }
+  const shown =
+    mode === 'manual' ? { model: man as string, effort: l?.effort ?? '' } : mode === 'pinned' && pinned ? pinned : mode === 'auto' && r ? r : idle
   return {
     mode,
     model: shown.model,
     effort: shown.effort,
-    role: routed && r ? r.role : '',
+    role: mode === 'auto' && r ? r.role : mode === 'pinned' && pinned ? pinned.role : '',
     why: mode === 'auto' && r?.why ? r.why : '',
   }
 }
 
+async function view($: any, cfg: Config): Promise<View> {
+  return {
+    cfg,
+    last: await read($, last),
+    live: await read($, live),
+    paused: await read($, paused),
+    manual: await read($, manual),
+    pin: await read($, pin),
+    base: await read($, base),
+  }
+}
+
 /** Display form of a task, mode or effort word: Plan, Manual, High. */
-const cap = (w: string) => (w ? w[0].toUpperCase() + w.slice(1) : w)
+const cap = (w: string) => (w ? w.charAt(0).toUpperCase() + w.slice(1) : w)
 const EFFORT_LABEL: Record<string, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'X-High', max: 'Max' }
 const effortLabel = (w: string) => EFFORT_LABEL[w] ?? cap(w)
 
@@ -110,7 +159,7 @@ function routeLine(Text: any, s: ReturnType<typeof status>, showEffort = true) {
     <Text wrap="truncate-end">
       <Text color={color} dimColor={off}>{m.on}</Text>
       <Text dimColor>{m.off}</Text>
-      <Text color={color} dimColor={off} bold={!off}> {MODEL_NAME[s.model] ?? s.model}</Text>
+      <Text color={color} dimColor={off} bold={!off}> {MODEL_NAME[s.model] ?? (s.model || 'Session model')}</Text>
       {s.effort && showEffort ? <Text dimColor> · {effortLabel(s.effort)}</Text> : null}
       {s.mode === 'pinned' ? <Text dimColor>{'  '}Pinned</Text> : null}
       {s.mode === 'manual' ? <Text color="warning">{'  '}Manual</Text> : null}
@@ -131,6 +180,13 @@ function ring(pct: number) {
   const glyph = pct < 13 ? '○' : pct < 38 ? '◔' : pct < 63 ? '◑' : pct < 88 ? '◕' : '●'
   return { glyph, color: gauge(pct, 1).color }
 }
+
+/** Columns the band keeps for the route, the context circle and the two buttons. */
+const PLACE_RESERVED = 62
+/** Below this many columns left over, repo | branch is not shown at all. */
+const PLACE_MIN = 12
+/** Cut a string to `width` columns, ending in … when cut. */
+const clip = (text: string, width: number) => (text.length <= width ? text : `${text.slice(0, Math.max(0, width - 1))}…`)
 
 /** Open the pane on one of its tabs. */
 async function openPane($: any, which: 'now' | 'routes') {
@@ -153,16 +209,21 @@ function padLabel(label: string, all: readonly string[], surface: string) {
  * The repo this session works in. When the folder is a repo, that one; when it holds several
  * repos (like ~/Documents/Matt3r), the child whose HEAD moved most recently: the one in use.
  */
+const MAX_CHILDREN = 40 // a folder of repos is scanned this far at most, so a huge folder stays quick
+
 async function repoOf($: any, dir: string) {
   const here = await $.vcs.detect({ path: dir }).catch(() => null)
   if (here) return { name: String(here.root).split('/').filter(Boolean).pop() ?? dir, branch: here.branch ?? null }
-  const entries = await $.fs.list(dir).catch(() => [])
+  const entries: any[] = await $.fs.list(dir).catch(() => [])
+  const children = entries.filter(x => x.kind === 'directory' && !x.name.startsWith('.')).slice(0, MAX_CHILDREN)
+  const heads = await Promise.all(
+    children.map(async x => {
+      const head = await $.fs.stat(`${dir}/${x.name}/.git/logs/HEAD`).catch(() => null)
+      return head ? { path: `${dir}/${x.name}`, at: Number(head.mtimeMs) } : null
+    }),
+  )
   let best: { path: string; at: number } | null = null
-  for (const entry of entries) {
-    if (entry.kind !== 'directory' || entry.name.startsWith('.')) continue
-    const head = await $.fs.stat(`${dir}/${entry.name}/.git/logs/HEAD`).catch(() => null)
-    if (head && (!best || head.mtimeMs > best.at)) best = { path: `${dir}/${entry.name}`, at: head.mtimeMs }
-  }
+  for (const h of heads) if (h && (!best || h.at > best.at)) best = h
   if (!best) return null
   const copy = await $.vcs.detect({ path: best.path }).catch(() => null)
   return { name: best.path.split('/').pop() ?? best.path, branch: copy?.branch ?? null }
@@ -182,10 +243,29 @@ async function where($: any) {
   await update($, place, () => value)
 }
 
+/** Decide and park the route of a submitted prompt (see the prompt.submit hook). */
+async function routeSubmit($: any, e: PromptSubmitInput) {
+  const person = fromPerson(e)
+  if (e.turnId === undefined) {
+    // Idle: this prompt starts the next turn. Decide its route now; turn.start binds it.
+    const r = person ? await decide($, e.text, !!e.command).catch(() => null) : null
+    await update($, pending, () => ({ route: r }))
+    if (person) await update($, last, () => r)
+  } else if (person && !e.command) {
+    // Typed while a turn runs: never touches that turn. Kept for a later turn with this text.
+    const r = await decide($, e.text, false).catch(() => null)
+    await update($, queued, () => (r ? { text: e.text, route: r } : null))
+  }
+}
+
+const USAGE = 'Use /router for the pane, /router off|on to pause or resume this session, /router fable|opus|sonnet|haiku to pin a model, /router auto to unpin.'
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    await $.command.register({ name: 'router', description: 'Claude Model Router settings: models per task, setups, pause (also: /router off|on|auto|<task>)' })
+    await $.command.register({ name: 'router', description: 'Claude Model Router pane (also: /router off|on, /router auto, /router fable|opus|sonnet|haiku)' })
     await update($, route, () => null)
+    await update($, pending, () => null)
+    await update($, queued, () => null)
     await reload($).catch(() => {})
     await where($).catch(() => {})
     const startModel = family(String(await $.session.model().catch(() => '')))
@@ -212,29 +292,49 @@ export const register: Register = on => {
       await update($, pin, () => arg)
       return { text: `Claude Model Router: every turn uses ${MODEL_NAME[arg]}. /router auto to undo.` }
     }
+    if (arg) return { text: `Claude Model Router: unknown option "${arg}". ${USAGE}` }
     await reload($).catch(() => {})
     await $.ui.open({ id: PANE, title: 'Claude Model Router' })
     return { text: 'Claude Model Router pane opened.' }
   })
 
-  on('turn.complete', async ($, e, next) => {
-    const r = await next(e)
-    if (!e.agentId) await where($).catch(() => {})
-    return r
-  })
-
   on('prompt.submit', async ($, e, next) => {
-    if (!e.agentId) await where($).catch(() => {})
-    if (e.agentId || e.command) return next(e)
-    const r = await decide($, e.text).catch(() => null)
-    await update($, route, () => r)
+    where($).catch(() => {}) // the band's repo and context: refreshed, never waited for
+    await routeSubmit($, e).catch(() => {}) // best effort: on any failure the prompt goes through unrouted
     return next(e)
   })
 
+  on('turn.start', async ($, e, next) => {
+    if (e.agentId !== undefined) return next(e)
+    const p = await read($, pending)
+    let r: Route | null = p ? p.route : null
+    if (!p) {
+      const q = await read($, queued)
+      if (q && e.text.trim() && q.text.trim() === e.text.trim()) {
+        r = q.route
+        await update($, queued, () => null)
+        await update($, last, () => r)
+      }
+    }
+    await update($, pending, () => null)
+    await update($, route, () => (r ? { ...r, turnId: e.turnId } : null))
+    return next(e)
+  })
+
+  on('turn.complete', async ($, e, next) => {
+    const result = await next(e)
+    if (e.agentId === undefined) {
+      const r = await read($, route)
+      if (r && r.turnId === e.turnId) await update($, route, () => null)
+      await where($).catch(() => {})
+    }
+    return result
+  })
+
   on('turn.step', async function* ($, e, next) {
-    if (e.agentId) return yield* next(e)
+    if (e.agentId !== undefined) return yield* next(e)
     const r = await read($, route)
-    if (!r) {
+    if (!r || r.turnId !== e.turnId || (await read($, paused))) {
       const sent: Live = { model: family(e.model), effort: typeof e.effort === 'string' ? e.effort : '' }
       await update($, live, () => sent)
       return yield* next(e)
@@ -249,31 +349,38 @@ export const register: Register = on => {
     const cfg = await read($, config)
     if (!cfg) return next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
-    const s = status(cfg, await read($, route), await read($, live), await read($, paused), await read($, manual))
-    const pinned = await read($, pin)
+    const seen = await view($, cfg)
+    const s = status(seen)
+    const pinned = seen.pin
     const cols = e.props.bodyColumns ?? 80
     const pl = await read($, place)
+    // Repo | branch gets what is left after the route and the controls, and only if a useful
+    // part of it fits; it is cut to that width, so a long branch never pushes the row over.
+    const room = cols - PLACE_RESERVED
+    const where = pl ? `${pl.project}${pl.branch ? ` | ${pl.branch}` : ''}` : ''
+    const placeText = where && room >= PLACE_MIN ? clip(where, room) : ''
 
     const row = (
       <Box paddingX={1} justifyContent="space-between" gap={2}>
         <Box gap={2} flexShrink={1} overflow="hidden">
           <Box flexShrink={0}>{routeLine(Text, s, cols >= 48)}</Box>
         </Box>
-        <Box gap={1} flexShrink={0}>
-          {pl && cols >= 70 ? (
-            <Text dimColor wrap="truncate-end">
-              {pl.project}
-              {pl.branch ? ` | ${pl.branch}` : ''}
-            </Text>
+        <Box gap={1} flexShrink={1} overflow="hidden" justifyContent="flex-end">
+          {placeText ? (
+            <Box flexShrink={1} overflow="hidden">
+              <Text dimColor wrap="truncate-end">{placeText}</Text>
+            </Box>
           ) : null}
-          {pl?.ctx != null ? (
-            <Text>
-              <Text color={ring(pl.ctx).color}>{ring(pl.ctx).glyph}</Text>
-              <Text dimColor={pl.ctx < 60} color={pl.ctx >= 60 ? ring(pl.ctx).color : undefined}> {pl.ctx}%</Text>
-            </Text>
-          ) : null}
-          <Button key="pin" label={pinned ? `${MODEL_NAME[pinned] ?? cap(pinned)} ▾` : 'Auto ▾'} variant="secondary" onPress={() => openPane($, 'now')} />
-          <Button key="settings" label="⚙️" variant="secondary" onPress={() => openPane($, 'routes')} />
+          <Box gap={1} flexShrink={0}>
+            {pl?.ctx != null ? (
+              <Text>
+                <Text color={ring(pl.ctx).color}>{ring(pl.ctx).glyph}</Text>
+                <Text dimColor={pl.ctx < 60} color={pl.ctx >= 60 ? ring(pl.ctx).color : undefined}> {pl.ctx}%</Text>
+              </Text>
+            ) : null}
+            <Button key="pin" label={pinned ? `${MODEL_NAME[pinned] ?? cap(pinned)} ▾` : 'Auto ▾'} variant="secondary" onPress={() => openPane($, 'now')} />
+            <Button key="settings" label="⚙️" variant="secondary" onPress={() => openPane($, 'routes')} />
+          </Box>
         </Box>
       </Box>
     )
@@ -286,14 +393,16 @@ export const register: Register = on => {
     const cfg = await read($, config)
     if (!cfg) return <Text dimColor>Loading…</Text>
     const current = (await read($, tab)) === 'routes' ? 'routes' : 'now'
-    const s = status(cfg, await read($, route), await read($, live), await read($, paused), await read($, manual))
-    const pinned = await read($, pin)
+    const seen = await view($, cfg)
+    const s = status(seen)
+    const pinned = seen.pin
     const pl = await read($, place)
     const isOff = s.mode === 'off'
     const setup: Setup = cfg.setups[cfg.active] ?? {}
-    const slotOf = (role: string) => setup[role] ?? { model: cfg.mainModel, effort: '' }
-    const startedOn = await read($, base)
-    const cols = e.props.bodyColumns ?? 60
+    const slotOf = (role: string) => setup[role] ?? { model: '', effort: '' }
+    const startedOn = seen.base
+    // The Models rows need ~49 columns side by side; a narrower dock stacks each row in two lines.
+    const narrow = (e.props.bodyColumns ?? 60) < 50
 
     // Minimized on the desktop: the route alone.
     if (e.props.placement === 'widget') return routeLine(Text, s)
@@ -328,19 +437,45 @@ export const register: Register = on => {
           <Box flexDirection="column" borderStyle="round" borderDimColor paddingX={1}>
             {ROLE_LIST.map(role => {
               const slot = slotOf(role)
+              const modelPick = (
+                <Box width={14} flexShrink={0} flexDirection="column" marginRight={1}>
+                  <Select key={`model-${role}`} options={MODEL_LIST.map(v => ({ value: v, label: padLabel(MODEL_NAME[v] ?? v, MODEL_LIST.map(x => MODEL_NAME[x] ?? x), e.surface) }))} value={slot.model} onSelect={v => setSlot($, role, 'model', v)} />
+                </Box>
+              )
+              const effortPick = (
+                <Box width={14} flexShrink={0} flexDirection="column" marginRight={1}>
+                  <Select key={`effort-${role}`} options={EFFORT_LIST.map(v => ({ value: v, label: padLabel(effortLabel(v), EFFORT_LIST.map(effortLabel), e.surface) }))} value={slot.effort} onSelect={v => setSlot($, role, 'effort', v)} />
+                </Box>
+              )
+              const dots = (
+                <Text>
+                  <Text color={MODEL_COLOR[slot.model]}>{meter(slot.effort).on}</Text>
+                  <Text dimColor>{meter(slot.effort).off}</Text>
+                </Text>
+              )
+              if (narrow) {
+                // Two lines per task: name and meter, then the two dropdowns (about 30 columns).
+                return (
+                  <Box key={`edit-${role}`} flexDirection="column">
+                    <Box gap={1}>
+                      <Text>{cap(role)}</Text>
+                      {dots}
+                    </Box>
+                    <Box alignItems="center">
+                      {modelPick}
+                      {effortPick}
+                    </Box>
+                  </Box>
+                )
+              }
               return (
                 <Box key={`edit-${role}`} alignItems="center">
                   <Box width={10} flexShrink={0}>
                     <Text>{cap(role)}</Text>
                   </Box>
-                  <Box width={14} flexShrink={0} flexDirection="column" marginRight={1}>
-                    <Select key={`model-${role}`} options={MODEL_LIST.map(v => ({ value: v, label: padLabel(MODEL_NAME[v], MODEL_LIST.map(x => MODEL_NAME[x]), e.surface) }))} value={slot.model} onSelect={v => setSlot($, role, 'model', v)} />
-                  </Box>
-                  <Box width={14} flexShrink={0} flexDirection="column" marginRight={1}>
-                    <Select key={`effort-${role}`} options={EFFORT_LIST.map(v => ({ value: v, label: padLabel(effortLabel(v), EFFORT_LIST.map(effortLabel), e.surface) }))} value={slot.effort} onSelect={v => setSlot($, role, 'effort', v)} />
-                  </Box>
-                  <Text color={MODEL_COLOR[slot.model]}>{meter(slot.effort).on}</Text>
-                  <Text dimColor>{meter(slot.effort).off}</Text>
+                  {modelPick}
+                  {effortPick}
+                  {dots}
                 </Box>
               )
             })}
@@ -349,7 +484,7 @@ export const register: Register = on => {
             <Box flexDirection="column">
               {section('Setup')}
               <Box borderStyle="round" borderDimColor paddingX={1}>
-                <Select key="setup" options={Object.keys(cfg.setups).map(v => ({ value: v }))} value={cfg.active} onSelect={v => edit($, c => ({ ...c, active: v }))} />
+                <Select key="setup" options={Object.keys(cfg.setups).map(v => ({ value: v }))} value={cfg.active} onSelect={v => edit($, c => (c.setups[v] ? { ...c, active: v } : c))} />
               </Box>
             </Box>
           ) : null}
@@ -376,7 +511,9 @@ export const register: Register = on => {
             <Text dimColor size="footnote">{s.effort ? `  ${effortLabel(s.effort)} effort` : ''}{s.why ? `  ← ${s.why}` : ''}</Text>
           </Text>
           {s.mode === 'manual' ? (
-            <Text color="warning" size="footnote" wrap="truncate-end">/model {startedOn ?? cfg.mainModel} to resume routing</Text>
+            <Text color="warning" size="footnote" wrap="truncate-end">
+              {startedOn ? `/model ${startedOn} to resume routing` : 'Switch back with /model to resume routing'}
+            </Text>
           ) : null}
         </Box>
 

@@ -10,41 +10,26 @@ const USAGE = `Usage: claude-model-router [command]
   set <role> <model> [effort]  change one role in the active setup
   save <name>                  save the active setup under a new name and switch to it
   delete <setup>               delete a saved setup
-  on | off                     turn routing on/off everywhere (in a session: /router off)
+  on | off                     turn routing on/off everywhere (one session only: /router off)
+  rules                        write the default keyword rules to rules.json to edit
 
 Roles: ${ROLES.join(', ')}
 Models: fable, opus, sonnet, haiku    Efforts: low, medium, high, xhigh, max
 `;
 
-function takeSession(argv) {
-  const args = [...argv];
-  let session = null;
-  const i = args.indexOf('--session');
-  if (i !== -1) {
-    const v = args[i + 1];
-    session = v && !v.startsWith('-') ? v : null;
-    args.splice(i, v !== undefined && !v.startsWith('-') ? 2 : 1);
-  }
-  return { args: args.filter(a => a !== ''), session, sessionFlag: i !== -1 };
-}
-
-function showText(session) {
+function showText() {
   const s = store.activeSetup();
-  const on = session ? store.sessionEnabled(session) : store.loadSetups().enabled;
-  const lines = [`Setup: ${store.activeName()}${on ? '' : '   (routing OFF' + (session ? ' for this session' : '') + ')'}`, ''];
+  const on = store.loadSetups().enabled;
+  const lines = [`Setup: ${store.activeName()}${on ? '' : '   (routing OFF)'}`, ''];
   for (const r of ROLES) {
     lines.push(`${r.padEnd(8)} ${s[r].model.padEnd(8)} ${s[r].effort.padEnd(7)} ${ROLE_INFO[r]}`);
-  }
-  if (process.env.CLAUDE_CODE_SUBAGENT_MODEL) {
-    lines.push('', `Warning: CLAUDE_CODE_SUBAGENT_MODEL=${process.env.CLAUDE_CODE_SUBAGENT_MODEL} is set and overrides every helper's model.`);
   }
   return lines.join('\n') + '\n';
 }
 
 /** Run the CLI. io = {stdout, stderr, isTTY}. Returns the exit code. */
 export async function main(argv, io = { stdout: process.stdout, stderr: process.stderr, isTTY: process.stdout.isTTY && process.stdin.isTTY }) {
-  const { args, session, sessionFlag } = takeSession(argv);
-  const [cmd, ...rest] = args;
+  const [cmd, ...rest] = argv.filter(a => a !== '');
   const out = s => io.stdout.write(s);
   try {
     switch (cmd) {
@@ -54,10 +39,10 @@ export async function main(argv, io = { stdout: process.stdout, stderr: process.
           await runPicker();
           return 0;
         }
-        out(showText(session));
+        out(showText());
         return 0;
       case 'show':
-        out(showText(session));
+        out(showText());
         return 0;
       case 'list': {
         const { active, names } = store.listSetups();
@@ -66,11 +51,11 @@ export async function main(argv, io = { stdout: process.stdout, stderr: process.
       }
       case 'use':
         store.use(rest[0]);
-        out(showText(session));
+        out(showText());
         return 0;
       case 'set':
         store.setRole(rest[0], rest[1], rest[2]);
-        out(showText(session));
+        out(showText());
         return 0;
       case 'save':
         store.saveAs(rest[0]);
@@ -82,13 +67,20 @@ export async function main(argv, io = { stdout: process.stdout, stderr: process.
         return 0;
       case 'on':
       case 'off':
-        if (sessionFlag && !session) {
-          io.stderr.write('No session id was passed, so nothing changed. Use `claude-model-router on|off` in a terminal for a global switch.\n');
+        if (rest.length) {
+          io.stderr.write(`"${cmd}" takes no arguments and switches routing everywhere. To pause one session, type /router off in it.\n`);
           return 2;
         }
-        store.setEnabled(cmd === 'on', session || undefined);
-        out(`Routing ${cmd.toUpperCase()}${session ? ' for this session' : ''}.\n`);
+        store.setEnabled(cmd === 'on');
+        out(`Routing ${cmd.toUpperCase()}.\n`);
         return 0;
+      case 'rules': {
+        const { path, created } = store.writeDefaultRules();
+        out(created
+          ? `Wrote the default rules to ${path}\nEdit the regexes per role; new sessions and the next prompt pick them up.\n`
+          : `${path} already exists; edit it (delete it and run this again to start from the defaults).\n`);
+        return 0;
+      }
       case 'help':
       case '--help':
       case '-h':

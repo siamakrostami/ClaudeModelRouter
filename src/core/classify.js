@@ -1,10 +1,19 @@
-import { ROLES, DEFAULT_SETUP, agentName } from './defaults.js';
+import { ROLES, DEFAULT_SETUP } from './defaults.js';
 
 const MAX_SCAN = 4000; // only the start of a prompt is scanned, keeps huge pastes fast
 
-// Plain-language versions of #self and @model.
-const SELF_RE = /\b(do it yourself|do this yourself|don'?t delegate|no helpers?|without (a )?helpers?)\b/i;
-const PLAIN_MODEL_RE = /\b(?:use|using|with|on|switch to|via)\s+(?:the\s+)?(fable|opus|sonnet|haiku)\b/i;
+// A tag or mention ends at a space or punctuation, never inside a longer word: #code-owners is not #code.
+const END = '(?![\\w-])';
+const SELF_RE = new RegExp(`(?:^|\\s)#self${END}|\\b(do it yourself|do this yourself)\\b`, 'i');
+const TAG_RE = new RegExp(`(?:^|\\s)#(plan|review|hard|code|write|chores)${END}`, 'i');
+const AT_RE = new RegExp(`(?:^|\\s)@(fable|opus|sonnet|haiku)${END}`, 'i');
+// Only an explicit request switches model: "use opus for this", "use haiku to ...", "with opus please".
+// A model named in passing ("we run the batch job on haiku", "via haiku endpoint") does not.
+const PLAIN_MODEL_RE = /\buse (?:the )?(fable|opus|sonnet|haiku)(?: model)? (?:for (?:this|that|it)\b|to\b)|\b(?:with|using|on) (?:the )?(fable|opus|sonnet|haiku)(?: model)?,? please\b/i;
+
+// Chores (Haiku, low effort) only take short, clearly mechanical prompts.
+const CHORES_MAX_WORDS = 12;
+const CHORES_START_RE = /^\W*(?:please |can you |could you )?(?:rename|bump|move|format|lint|run (?:the )?(?:linter|formatter|prettier|eslint|swiftlint|swiftformat)|write (?:a |the )?commit message)\b/i;
 
 const compiled = new WeakMap();
 function compile(rules) {
@@ -23,26 +32,33 @@ function compile(rules) {
 
 function route(role, setup, forced, modelOverride, why = '') {
   const s = setup[role] || DEFAULT_SETUP[role];
-  return { role, model: modelOverride || s.model, effort: s.effort, agent: agentName(role), forced, why };
+  return { role, model: modelOverride || s.model, effort: s.effort, forced, why };
+}
+
+/** Chores may win only when the prompt is short or opens with a mechanical verb. */
+function choresAllowed(text) {
+  return text.trim().split(/\s+/).length <= CHORES_MAX_WORDS || CHORES_START_RE.test(text);
 }
 
 /**
  * Decide which role a prompt belongs to.
- * Overrides: #self (no routing), #<role>, @<model>. Otherwise keyword scoring; ties go to ROLES order.
- * Returns {role, model, effort, agent, forced, why} or null for "no routing".
+ * Overrides: #self or "do it yourself" (no routing), #<role>, @<model> or "use <model> for this".
+ * Otherwise keyword scoring: any other role's match beats chores, chores needs a short or
+ * mechanical prompt, and ties go to ROLES order (most capable first).
+ * Returns {role, model, effort, forced, why} or null for "no routing".
  */
 export function classify(prompt, rules, setup) {
   if (typeof prompt !== 'string' || !prompt.trim()) return null;
   const text = prompt.slice(0, MAX_SCAN);
 
-  if (/(^|\s)#self\b/i.test(text) || SELF_RE.test(text)) return null;
+  if (SELF_RE.test(text)) return null;
 
-  const tag = /(?:^|\s)#(plan|review|hard|code|write|chores)\b/i.exec(text);
+  const tag = TAG_RE.exec(text);
   if (tag) return route(tag[1].toLowerCase(), setup, true, undefined, tag[0].trim());
 
-  const at = /(?:^|\s)@(fable|opus|sonnet|haiku)\b/i.exec(text) || PLAIN_MODEL_RE.exec(text);
+  const at = AT_RE.exec(text) || PLAIN_MODEL_RE.exec(text);
   if (at) {
-    const model = at[1].toLowerCase();
+    const model = (at[1] || at[2]).toLowerCase();
     const byActive = ROLES.find(r => setup[r]?.model === model);
     const why = at[0].trim();
     if (byActive) return route(byActive, setup, true, undefined, why);
@@ -55,6 +71,7 @@ export function classify(prompt, rules, setup) {
   let bestScore = 0;
   let bestWhy = '';
   for (const role of ROLES) {
+    if (role === 'chores' && (best || !choresAllowed(text))) continue;
     let score = 0;
     let why = '';
     for (const re of res[role]) {
@@ -64,12 +81,4 @@ export function classify(prompt, rules, setup) {
     if (score > bestScore) { best = role; bestScore = score; bestWhy = why; }
   }
   return best ? route(best, setup, false, undefined, bestWhy) : null;
-}
-
-/** One-line note injected into the main chat. */
-export function note(r, mainModel = 'fable') {
-  if (r.role === 'plan' && r.model === mainModel) {
-    return `Claude Model Router: "plan" work → handle it yourself (${mainModel}).`;
-  }
-  return `Claude Model Router: "${r.role}" work → delegate to the ${r.agent} agent (${r.model}, ${r.effort}). Required: do this work through the Agent tool with subagent_type "${r.agent}" instead of doing it yourself; if the request mixes kinds of work, split it across router helpers.`;
 }

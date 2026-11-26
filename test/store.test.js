@@ -21,13 +21,6 @@ test('corrupt file backed up', () => {
   assert.deepEqual(d.setups[d.active], DEFAULT_SETUP);
 });
 
-test('corrupt rules backed up and defaults used', () => {
-  fs.writeFileSync(path.join(home, 'rules.json'), 'nope');
-  const r = store.loadRules();
-  assert.ok(fs.existsSync(path.join(home, 'rules.json.bak')));
-  assert.ok(Array.isArray(r.chores));
-});
-
 test('missing role filled', () => {
   const partial = structuredClone(DEFAULT_SETUP);
   delete partial.chores;
@@ -56,74 +49,32 @@ test('setRole rejects bad model, effort and role', () => {
   assert.throws(() => store.setRole('cook', 'opus'));
 });
 
-test('state per session and pruned', () => {
-  store.updateState('a', s => { s.last_route = 'code'; });
-  store.updateState('b', s => { s.last_route = 'write'; });
-  assert.equal(store.readState('a').last_route, 'code');
-  assert.equal(store.readState('b').last_route, 'write');
-  const old = (Date.now() - 25 * 3600 * 1000) / 1000;
-  fs.utimesSync(path.join(home, 'sessions', 'a'), old, old);
-  store.updateState('b', s => { s.last_route = 'code'; });
-  assert.deepEqual(store.readState('a'), {});
-});
-
-test('running entries: add, remove, expire', () => {
-  store.addRunning('s', 'tu1', 'code→sonnet');
-  store.addRunning('s', 'tu2', 'write→sonnet');
-  store.removeRunning('s', 'tu1');
-  assert.deepEqual(store.readState('s').running, { tu2: 'write→sonnet' });
-  const f = path.join(home, 'sessions', 's', 'running', 'tu2.json');
-  const old = (Date.now() - 31 * 60 * 1000) / 1000;
-  fs.utimesSync(f, old, old);
-  assert.equal(store.readState('s').running, undefined);
-});
-
-test('session ids and tool ids are made filename-safe', () => {
-  store.addRunning('../../evil', '../x', 'code→sonnet');
-  assert.ok(!fs.existsSync(path.join(home, '..', 'evil')));
-  assert.deepEqual(store.readState('../../evil').running, { '../x': 'code→sonnet' });
-});
-
-test('rules.json with an extra non-array key is kept', () => {
-  fs.writeFileSync(path.join(home, 'rules.json'), JSON.stringify({ _comment: 'mine', code: ['zebra'] }));
-  const r = store.loadRules();
-  assert.deepEqual(r.code, ['zebra']);
-  assert.ok(!fs.existsSync(path.join(home, 'rules.json.bak')));
-});
-
 test('use() ignores prototype names', () => {
   assert.throws(() => store.use('constructor'));
 });
 
-test('enabled: global and per session', () => {
-  assert.equal(store.sessionEnabled('s1'), true);
-  store.setEnabled(false);
-  assert.equal(store.sessionEnabled('s1'), false);
-  store.setEnabled(true);
-  store.setEnabled(false, 's1');
-  assert.equal(store.sessionEnabled('s1'), false);
-  assert.equal(store.sessionEnabled('s2'), true);
-});
-
 test('no .tmp left after write', () => {
   store.setRole('code', 'opus');
-  store.updateState('a', s => { s.x = 1; });
-  store.addRunning('a', 't', 'x');
+  store.setEnabled(false);
   const all = fs.readdirSync(home, { recursive: true });
   assert.deepEqual(all.filter(f => String(f).includes('.tmp')), []);
 });
 
-test('main_model defaults to fable, falls back on invalid, env overrides', () => {
-  delete process.env.CLAUDE_MODEL_ROUTER_MAIN_MODEL;
-  assert.equal(store.loadSetups().main_model, 'fable');
-  assert.equal(store.mainModel(), 'fable');
-  const d = store.loadSetups();
-  d.main_model = 'gpt';
-  store.saveSetups(d);
-  assert.equal(store.loadSetups().main_model, 'fable');
-  d.main_model = 'opus';
-  store.saveSetups(d);
-  assert.equal(store.mainModel(), 'opus');
-  process.env.CLAUDE_MODEL_ROUTER_MAIN_MODEL = 'sonnet';
-  try { assert.equal(store.mainModel(), 'sonnet'); } finally { delete process.env.CLAUDE_MODEL_ROUTER_MAIN_MODEL; }
+test('enabled is one global switch', () => {
+  assert.equal(store.loadSetups().enabled, true);
+  store.setEnabled(false);
+  assert.equal(store.loadSetups().enabled, false);
+  store.setEnabled(true);
+  assert.equal(store.loadSetups().enabled, true);
+});
+
+test('main_model is not written any more', () => {
+  store.setRole('code', 'opus');
+  assert.ok(!('main_model' in JSON.parse(fs.readFileSync(path.join(home, 'setups.json'), 'utf8'))));
+});
+
+test('session state helpers are gone', () => {
+  for (const name of ['readState', 'updateState', 'addRunning', 'removeRunning', 'clearRunning', 'sessionEnabled', 'mainModel', 'loadRules']) {
+    assert.equal(store[name], undefined, name);
+  }
 });

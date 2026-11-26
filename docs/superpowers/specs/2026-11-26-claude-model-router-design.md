@@ -1,5 +1,7 @@
 # Claude Model Router: model router for Claude Code (design)
 
+> **Superseded.** This document describes the original design: hooks, helper agents and a status line. The current design is the per-turn mod described in [README.md](../../../README.md). Kept for history only.
+
 Date: 2026-11-26 · Owner: Siamak
 
 ## Intent

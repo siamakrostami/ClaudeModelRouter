@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DEFAULT_RULES, DEFAULT_SETUP } from '../src/core/defaults.js';
-import { classify, note } from '../src/core/classify.js';
+import { classify } from '../src/core/classify.js';
 
 const c = p => classify(p, DEFAULT_RULES, DEFAULT_SETUP);
 const role = p => c(p)?.role ?? null;
@@ -60,7 +60,11 @@ test('plain-language model request acts like @model', () => {
 
 test('"do it yourself" acts like #self', () => {
   assert.equal(c('do it yourself: fix the bug'), null);
-  assert.equal(c("don't delegate, just fix the bug"), null);
+});
+
+test('"no helper" and "don\'t delegate" are ordinary words, not an opt-out', () => {
+  assert.equal(role('no helper text shows under the email field, add one'), 'code');
+  assert.equal(role("don't delegate, just fix the bug"), 'code');
 });
 
 test('#role override is forced', () => {
@@ -93,14 +97,14 @@ test('no match → null, including empty and huge prompts', () => {
   assert.ok(performance.now() - t < 50);
 });
 
-test('route carries model, effort and agent from the setup', () => {
+test('route carries model and effort from the setup', () => {
   assert.deepEqual(c('Implement the trips endpoint'),
-    { role: 'code', model: 'sonnet', effort: 'medium', agent: 'claude-model-router:router-code', forced: false, why: 'Implement' });
+    { role: 'code', model: 'sonnet', effort: 'medium', forced: false, why: 'Implement' });
 });
 
 test('why names the override or the first matched words', () => {
   assert.equal(c('#hard rename foo').why, '#hard');
-  assert.equal(c('use haiku for this: x').why, 'use haiku');
+  assert.equal(c('use haiku for this: x').why, 'use haiku for this');
   assert.equal(c('Debug the flaky upload test').why, 'Debug');
 });
 
@@ -109,13 +113,55 @@ test('bad regex in rules is skipped, not thrown', () => {
   assert.equal(classify('implement it', rules, DEFAULT_SETUP).role, 'code');
 });
 
-test('note: delegate form', () => {
-  assert.equal(note(c('Implement the trips endpoint')),
-    'Claude Model Router: "code" work → delegate to the claude-model-router:router-code agent (sonnet, medium). Required: do this work through the Agent tool with subagent_type "claude-model-router:router-code" instead of doing it yourself; if the request mixes kinds of work, split it across router helpers.');
+// Mentions of a model that are not a request to switch to it.
+const notOverrides = [
+  'which model is cheaper for us? we run the batch job on haiku today',
+  'working on opus audio codec support',
+  'send the file via haiku endpoint',
+  'we deploy with sonnet as the default',
+  'switch to opus codec in the encoder settings',
+];
+for (const prompt of notOverrides) {
+  test(`not a model override: "${prompt}"`, () => assert.notEqual(c(prompt)?.forced, true));
+}
+
+test('explicit plain-language model requests still force a model', () => {
+  for (const p of ['use opus for this', 'use opus to fix the layout', 'with haiku please', 'please use the sonnet model for this']) {
+    assert.equal(c(p)?.forced, true, p);
+  }
 });
 
-test('note: plan on the main model is handled in place', () => {
-  assert.equal(note(c('Plan the migration')), 'Claude Model Router: "plan" work → handle it yourself (fable).');
-  const r = { ...c('Plan the migration'), model: 'opus' };
-  assert.match(note(r), /delegate to the claude-model-router:router-plan agent \(opus, xhigh\)/);
+test('#tag needs a clean end: #code-owners is not #code', () => {
+  assert.notEqual(c('update #code-owners for the new team')?.forced, true);
+  assert.notEqual(c('ping @opus-team about it')?.forced, true);
+  assert.equal(c('#code, then stop').role, 'code');
+  assert.equal(role('#self-hosted runner keeps failing, debug it'), 'hard');
+});
+
+// Real work that the old chores rules sent to Haiku low.
+const notChores = [
+  ['git diff shows my auth changes are gone after the rebase, help me recover them', 'hard'],
+  ['summarize the risks in this design and tell me whether we should ship', 'plan'],
+  ['look up how the SDK handles token refresh and rewrite our client to match', 'code'],
+  ['where is the session token validated? I think there is a security hole', 'review'],
+  ['lint errors everywhere after the upgrade, figure out what changed', 'hard'],
+  ['create a jira ticket for the login crash', 'write'],
+  ['open an issue for the crash on launch', 'write'],
+];
+for (const [prompt, expected] of notChores) {
+  test(`not chores: "${prompt}" → ${expected}`, () => assert.equal(role(prompt), expected));
+}
+
+test('chores still win short mechanical prompts', () => {
+  for (const p of ['git status', 'summarize this file', 'where is the config loaded', 'lint the trips module', 'bump the version to 2.4.1']) {
+    assert.equal(role(p), 'chores', p);
+  }
+});
+
+test('a long prompt that opens with a chores verb is still chores', () => {
+  assert.equal(role('rename getUserById to fetchUserById in every file of the api package and its tests'), 'chores');
+});
+
+test('a long prompt whose only match is a chores word stays on the session model', () => {
+  assert.equal(role('i was reading the logs this morning and want to look up what the nightly cron does with the old exports'), null);
 });

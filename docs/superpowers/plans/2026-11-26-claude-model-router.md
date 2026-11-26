@@ -1,5 +1,7 @@
 # Claude Model Router Implementation Plan
 
+> **Superseded.** This document describes the original design: hooks, helper agents and a status line. The current design is the per-turn mod described in [README.md](../../../README.md). Kept for history only.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** A Claude Code plugin that routes each prompt to a helper running on the right model (Fable/Opus/Sonnet/Haiku), following a named, saved setup, and shows the routing in the status line.

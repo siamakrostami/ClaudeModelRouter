@@ -1,10 +1,14 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { freshHome } from './helpers.js';
+import { DEFAULT_RULES } from '../src/core/defaults.js';
 import * as store from '../src/core/store.js';
 import { main } from '../src/cli.js';
 
-beforeEach(() => { freshHome(); delete process.env.CLAUDE_CODE_SUBAGENT_MODEL; });
+let home;
+beforeEach(() => { home = freshHome(); });
 
 async function run(...argv) {
   let out = '', err = '';
@@ -20,9 +24,9 @@ test('show prints six aligned rows', async () => {
   assert.match(rows[0], /^plan\s+fable\s+xhigh/);
 });
 
-test('show warns when CLAUDE_CODE_SUBAGENT_MODEL is set', async () => {
+test('show says nothing about subagent model variables', async () => {
   process.env.CLAUDE_CODE_SUBAGENT_MODEL = 'haiku';
-  assert.match((await run('show')).out, /CLAUDE_CODE_SUBAGENT_MODEL/);
+  try { assert.doesNotMatch((await run('show')).out, /SUBAGENT|helper/i); } finally { delete process.env.CLAUDE_CODE_SUBAGENT_MODEL; }
 });
 
 test('no args without a TTY behaves like show', async () => {
@@ -55,31 +59,32 @@ test('delete', async () => {
   assert.doesNotMatch((await run('list')).out, /tmp/);
 });
 
-test('off/on globally and per session', async () => {
-  await run('off');
-  assert.equal(store.sessionEnabled('x'), false);
+test('off/on are global', async () => {
+  assert.equal((await run('off')).out, 'Routing OFF.\n');
+  assert.equal(store.loadSetups().enabled, false);
+  assert.match((await run('show')).out, /routing OFF\)/);
   await run('on');
-  await run('off', '--session', 's1');
-  assert.equal(store.sessionEnabled('s1'), false);
-  assert.equal(store.sessionEnabled('s2'), true);
+  assert.equal(store.loadSetups().enabled, true);
 });
 
-test('empty --session value is treated as global', async () => {
-  assert.equal((await run('show', '--session')).code, 0);
-  assert.equal((await run('show', '--session', '')).code, 0);
-});
-
-test('on/off with an empty --session refuses instead of going global', async () => {
-  const r = await run('off', '--session');
+test('--session is no longer an option', async () => {
+  const r = await run('off', '--session', 's1');
   assert.equal(r.code, 2);
-  assert.match(r.err, /session/);
-  assert.equal(store.sessionEnabled('x'), true);
-  assert.equal((await run('off', '--session', '')).code, 2);
+  assert.equal(store.loadSetups().enabled, true);
 });
 
-test('show reflects a session-level off', async () => {
-  await run('off', '--session', 's1');
-  assert.match((await run('show', '--session', 's1')).out, /OFF/);
+test('rules writes the default rules once and never overwrites', async () => {
+  const file = path.join(home, 'rules.json');
+  const first = await run('rules');
+  assert.equal(first.code, 0);
+  assert.ok(first.out.includes(file));
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), DEFAULT_RULES);
+  fs.writeFileSync(file, '{"code":["mine"]}');
+  const again = await run('rules');
+  assert.equal(again.code, 0);
+  assert.ok(again.out.includes(file));
+  assert.match(again.out, /already/i);
+  assert.equal(fs.readFileSync(file, 'utf8'), '{"code":["mine"]}');
 });
 
 test('unknown command exits 2 with help', async () => {
