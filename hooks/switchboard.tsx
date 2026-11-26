@@ -149,14 +149,36 @@ function padLabel(label: string, all: readonly string[], surface: string) {
   return label + '\u2007'.repeat(DESKTOP_PAD[label] ?? 0)
 }
 
-/** Project, branch and context percentage for the band. Each part is best effort. */
+/**
+ * The repo this session works in. When the folder is a repo, that one; when it holds several
+ * repos (like ~/Documents/Matt3r), the child whose HEAD moved most recently: the one in use.
+ */
+async function repoOf($: any, dir: string) {
+  const here = await $.vcs.detect({ path: dir }).catch(() => null)
+  if (here) return { name: String(here.root).split('/').filter(Boolean).pop() ?? dir, branch: here.branch ?? null }
+  const entries = await $.fs.list(dir).catch(() => [])
+  let best: { path: string; at: number } | null = null
+  for (const entry of entries) {
+    if (entry.kind !== 'directory' || entry.name.startsWith('.')) continue
+    const head = await $.fs.stat(`${dir}/${entry.name}/.git/logs/HEAD`).catch(() => null)
+    if (head && (!best || head.mtimeMs > best.at)) best = { path: `${dir}/${entry.name}`, at: head.mtimeMs }
+  }
+  if (!best) return null
+  const copy = await $.vcs.detect({ path: best.path }).catch(() => null)
+  return { name: best.path.split('/').pop() ?? best.path, branch: copy?.branch ?? null }
+}
+
+/** Repo, branch and context percentage for the band. Each part is best effort. */
 async function where($: any) {
-  const root = String(await $.session.root())
-  const project = root.split('/').filter(Boolean).pop() ?? root
-  const copy = await $.vcs.detect({ path: root }).catch(() => null)
+  const dir = String(await $.session.cwd().catch(() => '')) || String(await $.session.root())
+  const repo = await repoOf($, dir)
   const usage = await $.session.usage().catch(() => null)
   const pct = usage?.context?.percent
-  const value: Place = { project, branch: copy?.branch ?? null, ctx: typeof pct === 'number' ? pct : null }
+  const value: Place = {
+    project: repo?.name ?? dir.split('/').filter(Boolean).pop() ?? dir,
+    branch: repo?.branch ?? null,
+    ctx: typeof pct === 'number' ? pct : null,
+  }
   await update($, place, () => value)
 }
 
@@ -238,10 +260,10 @@ export const register: Register = on => {
           <Box flexShrink={0}>{routeLine(Text, s, cols >= 48)}</Box>
         </Box>
         <Box gap={1} flexShrink={0}>
-          {pl && cols >= 90 ? (
+          {pl && cols >= 70 ? (
             <Text dimColor wrap="truncate-end">
               {pl.project}
-              {pl.branch ? ` ⎇ ${pl.branch}` : ''}
+              {pl.branch ? ` | ${pl.branch}` : ''}
             </Text>
           ) : null}
           {pl?.ctx != null ? (
