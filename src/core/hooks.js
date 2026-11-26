@@ -3,8 +3,7 @@ import path from 'node:path';
 import { roleFromAgent } from './defaults.js';
 import { classify, note } from './classify.js';
 import * as store from './store.js';
-
-const MAIN_MODEL = process.env.SWITCHBOARD_MAIN_MODEL || 'fable';
+import { detectMainModel } from './transcript.js';
 
 export const SESSION_RULE =
   'Switchboard (installed by the user) routes work by model. When a prompt carries a "Switchboard:" routing note, ' +
@@ -23,15 +22,22 @@ export function handleSessionStart(payload) {
 export function handlePrompt(payload) {
   const sid = payload?.session_id;
   if (!store.sessionEnabled(sid)) return null;
+  // The user switched the main chat's model by hand (/model): step aside until they switch back.
+  const detected = detectMainModel(payload?.transcript_path);
+  if (detected && detected !== store.mainModel()) {
+    store.updateState(sid, s => { s.manual = detected; s.last_route = null; s.forced = null; });
+    return null;
+  }
   const setup = store.activeSetup();
   const r = classify(payload?.prompt, store.loadRules(), setup);
   store.updateState(sid, s => {
+    s.manual = null;
     s.last_route = r ? r.role : null;
     // A forced model outside the setup is honoured for the next helper of that role only.
     s.forced = r && r.model !== setup[r.role].model ? { role: r.role, model: r.model } : null;
   });
   if (!r) return null;
-  return { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: note(r, MAIN_MODEL) } };
+  return { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: note(r, store.mainModel()) } };
 }
 
 /** PreToolUse(Agent|Task): force router helpers onto the active setup's model and effort. */
@@ -40,6 +46,7 @@ export function handleAgentPre(payload) {
   const role = roleFromAgent(input?.subagent_type);
   if (!role) return null;
   const sid = payload.session_id;
+  if (store.readState(sid).manual) return null;
   let { model, effort } = store.activeSetup()[role];
   const forced = store.readState(sid).forced;
   if (forced?.role === role) {

@@ -61,7 +61,16 @@ switchboard off | on             # add --session <id> for one session only
 Inside Claude Code: `/router`, `/router use fast`, `/router off`.
 
 Data lives in `~/.claude/switchboard/`: `setups.json` and `rules.json` (keyword regexes,
-which you can edit) and `state.json`. Errors go to `error.log`.
+which you can edit) and `sessions/` (per-session state). Errors go to `error.log`.
+
+## Switching models yourself
+
+If you change the main chat's model with `/model`, Switchboard steps aside for that
+session: no routing notes, and helpers are left alone. The status line shows
+`⇢ manual (opus)`. Switch back to Fable (the configured main model) and routing resumes
+on your next prompt. To turn routing off or on explicitly, use `/router off` or
+`switchboard off` (and `on`). If your main model is not Fable, set `main_model` in
+`setups.json` (or `SWITCHBOARD_MAIN_MODEL`).
 
 ## Test
 

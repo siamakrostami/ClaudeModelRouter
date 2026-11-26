@@ -1,4 +1,6 @@
 import { test, beforeEach } from 'node:test';
+import fs from 'node:fs';
+import os from 'node:os';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
@@ -108,4 +110,41 @@ test('on-prompt.js end to end', () => {
     input: JSON.stringify({ session_id: sid, prompt: 'rename foo to bar' }), encoding: 'utf8', env: process.env });
   assert.equal(r.status, 0);
   assert.match(JSON.parse(r.stdout).hookSpecificOutput.additionalContext, /router-chores/);
+});
+
+function transcript(...lines) {
+  const f = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-tr-')), 't.jsonl');
+  fs.writeFileSync(f, lines.join('\n') + '\n');
+  return f;
+}
+const asst = m => JSON.stringify({ type: 'assistant', message: { model: m } });
+
+test('manual /model switch: Switchboard steps aside, then resumes on switching back', () => {
+  const prompt = 'Implement the trips endpoint';
+  const opus = transcript(asst('claude-opus-5-5'));
+  assert.equal(handlePrompt({ session_id: sid, prompt, transcript_path: opus }), null);
+  assert.equal(store.readState(sid).manual, 'opus');
+  assert.equal(store.readState(sid).last_route, null);
+  assert.equal(pre('switchboard:router-code'), null);
+  assert.equal(store.readState(sid).running, undefined);
+
+  const fable = transcript(asst('claude-opus-5-5'), asst('claude-fable-5-2'));
+  const out = handlePrompt({ session_id: sid, prompt, transcript_path: fable });
+  assert.match(out.hookSpecificOutput.additionalContext, /router-code/);
+  assert.equal(store.readState(sid).manual, null);
+  assert.ok(pre('switchboard:router-code'));
+});
+
+test('main_model setting changes what counts as manual', () => {
+  const d = store.loadSetups();
+  d.main_model = 'opus';
+  store.saveSetups(d);
+  const opus = transcript(asst('claude-opus-5-5'));
+  assert.ok(handlePrompt({ session_id: sid, prompt: 'Implement the trips endpoint', transcript_path: opus }));
+  assert.equal(store.readState(sid).manual, null);
+});
+
+test('handleSessionStart still returns the rule when the transcript shows another model', () => {
+  const opus = transcript(asst('claude-opus-5-5'));
+  assert.match(handleSessionStart({ session_id: sid, transcript_path: opus }).hookSpecificOutput.additionalContext, /standing instruction/);
 });

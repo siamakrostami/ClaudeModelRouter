@@ -50,7 +50,14 @@ export function loadSetups() {
   if (!d.setups[d.active]) d.active = Object.keys(d.setups)[0] || 'default';
   if (!d.setups[d.active]) d.setups[d.active] = structuredClone(DEFAULT_SETUP);
   if (typeof d.enabled !== 'boolean') d.enabled = true;
+  if (!MODELS.includes(d.main_model)) d.main_model = 'fable';
   return d;
+}
+
+/** The model the main chat is configured to run on. SWITCHBOARD_MAIN_MODEL overrides setups.json. */
+export function mainModel() {
+  const env = process.env.SWITCHBOARD_MAIN_MODEL;
+  return MODELS.includes(env) ? env : loadSetups().main_model;
 }
 
 export function saveSetups(d) {

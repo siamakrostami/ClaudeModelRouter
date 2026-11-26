@@ -112,3 +112,18 @@ test('no .tmp left after write', () => {
   const all = fs.readdirSync(home, { recursive: true });
   assert.deepEqual(all.filter(f => String(f).includes('.tmp')), []);
 });
+
+test('main_model defaults to fable, falls back on invalid, env overrides', () => {
+  delete process.env.SWITCHBOARD_MAIN_MODEL;
+  assert.equal(store.loadSetups().main_model, 'fable');
+  assert.equal(store.mainModel(), 'fable');
+  const d = store.loadSetups();
+  d.main_model = 'gpt';
+  store.saveSetups(d);
+  assert.equal(store.loadSetups().main_model, 'fable');
+  d.main_model = 'opus';
+  store.saveSetups(d);
+  assert.equal(store.mainModel(), 'opus');
+  process.env.SWITCHBOARD_MAIN_MODEL = 'sonnet';
+  try { assert.equal(store.mainModel(), 'sonnet'); } finally { delete process.env.SWITCHBOARD_MAIN_MODEL; }
+});

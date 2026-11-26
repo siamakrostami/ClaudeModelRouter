@@ -109,3 +109,10 @@ test('statusSegment states', () => {
   store.setEnabled(false, 's1');
   assert.equal(statusSegment('s1'), '⇢ off');
 });
+
+test('statusSegment shows manual model switch', () => {
+  store.updateState('s1', s => { s.manual = 'opus'; });
+  assert.equal(statusSegment('s1'), '⇢ manual (opus)');
+  store.setEnabled(false, 's1');
+  assert.equal(statusSegment('s1'), '⇢ off');
+});
