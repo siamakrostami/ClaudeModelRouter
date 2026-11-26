@@ -95,7 +95,13 @@ test('no match → null, including empty and huge prompts', () => {
 
 test('route carries model, effort and agent from the setup', () => {
   assert.deepEqual(c('Implement the trips endpoint'),
-    { role: 'code', model: 'sonnet', effort: 'medium', agent: 'switchboard:router-code', forced: false });
+    { role: 'code', model: 'sonnet', effort: 'medium', agent: 'switchboard:router-code', forced: false, why: 'Implement' });
+});
+
+test('why names the override or the first matched words', () => {
+  assert.equal(c('#hard rename foo').why, '#hard');
+  assert.equal(c('use haiku for this: x').why, 'use haiku');
+  assert.equal(c('Debug the flaky upload test').why, 'Debug');
 });
 
 test('bad regex in rules is skipped, not thrown', () => {

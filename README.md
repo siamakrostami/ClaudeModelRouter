@@ -1,76 +1,84 @@
 # Switchboard
 
-Automatic model routing for Claude Code. You type your request as usual, and Switchboard
-hands each kind of work to a helper running on the model that suits it:
+[![npm](https://img.shields.io/npm/v/cc-switchboard.svg)](https://www.npmjs.com/package/cc-switchboard)
+[![node](https://img.shields.io/node/v/cc-switchboard.svg)](https://nodejs.org)
+[![license](https://img.shields.io/npm/l/cc-switchboard.svg)](LICENSE)
+
+Per-turn model routing for Claude Code. You type your request as usual, and Switchboard
+sends that turn to the model and effort that suit it:
 
 | Role | Handles | Default |
 |---|---|---|
-| plan | planning, architecture, big decisions (main chat) | Fable · xhigh |
+| plan | planning, architecture, big decisions | Fable · xhigh |
 | review | code review | Fable · high |
 | hard | hard code, UI, debugging | Opus · high |
 | code | regular code, tests, refactors | Sonnet · medium |
 | write | PR descriptions, Slack, docs, tickets | Sonnet · medium |
 | chores | git, renames, formatting, lookups, commit messages | Haiku · low |
 
+A prompt that matches no role stays on your main model.
+
 ## How it works
 
-- **SessionStart hook** adds one standing rule: routing notes are the user's instruction.
-- **UserPromptSubmit hook** matches the prompt against keyword rules and adds a one-line
-  note naming the helper to use, e.g. `switchboard:router-code`.
-- **PreToolUse hook** forces every `router-*` helper onto the model and effort of your
-  active setup, whatever model the main chat asked for.
-- **Status line segment** shows the active setup and what is running:
-  `⇢ default · code→sonnet`.
+Switchboard is a Claude Code mod:
+
+- **`prompt.submit`** sorts the prompt into a role with keyword rules.
+- **`turn.step`** sends every main-chat request of that turn with the role's model and
+  effort. Nothing goes through a proxy or a helper agent, and subagents are left alone.
+- **The band above the prompt** shows the model, an effort meter, the role, and why it was
+  picked:
+
+  ```
+   ▮▮▮▯▯ Opus · high   hard  ← debug                         default  Router
+  ```
+
+- **`/router`** opens a pane:
+  - **Now**: this turn's route, a pin, and a setup picker.
+  - **Setups**: the model and effort for each role, plus save as.
 
 ## Install
 
 ```bash
-npm install
-npm link                                   # puts `switchboard` on PATH
-claude plugin marketplace add "$PWD"
+npm install -g cc-switchboard
+claude plugin marketplace add "$(npm root -g)/cc-switchboard"
 claude plugin install switchboard@switchboard
 ```
 
-Set the main chat to Fable (`"model": "fable"` in `~/.claude/settings.json`). To show the
-segment in your status line, add this to your status line script:
+From a clone instead: `npm install && npm link`, then `claude plugin marketplace add "$PWD"`
+and the same `claude plugin install` line. Needs Claude Code 2.1.330 or newer.
 
-```bash
-seg=$(switchboard status-segment "$session_id")
-```
+Set your main model to Fable (`"model": "fable"` in `~/.claude/settings.json`).
 
 ## Use
 
-You don't need any command for daily use. These overrides are optional, and each one
-applies only to the prompt it appears in:
+Just type. To steer one prompt, include one of these:
 
 - `#plan` `#review` `#hard` `#code` `#write` `#chores`: force a role
-- `@fable` `@opus` `@sonnet` `@haiku`: force a model
-- `#self`: no routing; the main chat does the work
+- `@fable` `@opus` `@sonnet` `@haiku`, or "use haiku for this": force a model
+- `#self` or "do it yourself": stay on the main model
 
-Setups:
+In a session:
+
+- `/router`: open the pane
+- `/router hard`: pin every turn to one role; `/router auto` unpins
+- `/router off` / `/router on`: pause or resume this session
+
+If you switch models yourself with `/model`, Switchboard steps aside until you switch back
+to the main model (set `main_model` in `setups.json` if yours is not Fable).
+
+From a terminal:
 
 ```bash
-switchboard                      # interactive picker
+switchboard                      # full-screen setup picker
 switchboard show | list
 switchboard set code opus high
 switchboard save fast            # save the current setup under a name
 switchboard use default
-switchboard off | on             # add --session <id> for one session only
+switchboard off | on             # everywhere
 ```
 
-Inside Claude Code: `/router`, `/router use fast`, `/router off`.
-
-Data lives in `~/.claude/switchboard/`: `setups.json` and `rules.json` (keyword regexes,
-which you can edit) and `sessions/` (per-session state). Errors go to `error.log`.
-
-## Switching models yourself
-
-If you change the main chat's model with `/model`, Switchboard steps aside for that
-session: no routing notes, and helpers are left alone. The status line shows
-`⇢ manual (opus)`. Switch back to Fable (the configured main model) and routing resumes
-on your next prompt. To turn routing off or on explicitly, use `/router off` or
-`switchboard off` (and `on`). If your main model is not Fable, set `main_model` in
-`setups.json` (or `SWITCHBOARD_MAIN_MODEL`).
+Data lives in `~/.claude/switchboard/`: `setups.json`, and `rules.json` (keyword regexes,
+which you can edit).
 
 ## Test
 

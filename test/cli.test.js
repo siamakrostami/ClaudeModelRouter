@@ -2,7 +2,6 @@ import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { freshHome } from './helpers.js';
 import * as store from '../src/core/store.js';
-import { statusSegment } from '../src/core/status.js';
 import { main } from '../src/cli.js';
 
 beforeEach(() => { freshHome(); delete process.env.CLAUDE_CODE_SUBAGENT_MODEL; });
@@ -83,36 +82,9 @@ test('show reflects a session-level off', async () => {
   assert.match((await run('show', '--session', 's1')).out, /OFF/);
 });
 
-test('/router command runs the bundled CLI, not PATH', async () => {
-  const fs = await import('node:fs');
-  const md = fs.readFileSync(new URL('../commands/router.md', import.meta.url), 'utf8');
-  assert.match(md, /node "\$\{CLAUDE_PLUGIN_ROOT\}\/bin\/switchboard\.js"/);
-});
-
 test('unknown command exits 2 with help', async () => {
   const r = await run('frobnicate');
   assert.equal(r.code, 2);
   assert.match(r.err, /usage/i);
 });
 
-test('status-segment prints the segment', async () => {
-  assert.equal((await run('status-segment', 's1')).out, '⇢ default');
-});
-
-test('statusSegment states', () => {
-  assert.equal(statusSegment('s1'), '⇢ default');
-  assert.equal(statusSegment(null), '⇢ default');
-  store.addRunning('s1', 'a', 'code→sonnet');
-  assert.equal(statusSegment('s1'), '⇢ default · code→sonnet');
-  store.addRunning('s1', 'b', 'write→sonnet');
-  assert.equal(statusSegment('s1'), '⇢ default · code→sonnet, write→sonnet');
-  store.setEnabled(false, 's1');
-  assert.equal(statusSegment('s1'), '⇢ off');
-});
-
-test('statusSegment shows manual model switch', () => {
-  store.updateState('s1', s => { s.manual = 'opus'; });
-  assert.equal(statusSegment('s1'), '⇢ manual (opus)');
-  store.setEnabled(false, 's1');
-  assert.equal(statusSegment('s1'), '⇢ off');
-});

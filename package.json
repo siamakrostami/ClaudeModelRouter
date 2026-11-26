@@ -1,35 +1,7 @@
 {
   "name": "cc-switchboard",
-  "version": "0.1.0",
-  "description": "Automatic model routing for Claude Code: Fable plans and reviews, Opus does hard code, Sonnet does regular code and writing, Haiku does chores.",
-  "type": "module",
-  "bin": {
-    "switchboard": "bin/switchboard.js"
-  },
-  "engines": {
-    "node": ">=20"
-  },
-  "scripts": {
-    "test": "node --test test/"
-  },
-  "license": "MIT",
-  "dependencies": {
-    "ink": "^5.2.1",
-    "react": "^18.3.1"
-  },
-  "files": [
-    "bin",
-    "src",
-    "hooks",
-    "agents",
-    "commands",
-    ".claude-plugin",
-    "README.md"
-  ],
-  "repository": {
-    "type": "git",
-    "url": "git+ssh://git@github.com/siamakrostami/switchboard.git"
-  },
+  "version": "0.2.0",
+  "description": "Per-turn model routing for Claude Code: each prompt runs on the right model and effort, with a band above the prompt and a /router pane.",
   "keywords": [
     "claude-code",
     "claude",
@@ -39,5 +11,38 @@
     "opus",
     "sonnet",
     "haiku"
-  ]
+  ],
+  "homepage": "https://github.com/siamakrostami/ClaudeModelRouter#readme",
+  "bugs": {
+    "url": "https://github.com/siamakrostami/ClaudeModelRouter/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/siamakrostami/ClaudeModelRouter.git"
+  },
+  "license": "MIT",
+  "author": "Siamak Rostami",
+  "type": "module",
+  "bin": {
+    "switchboard": "bin/switchboard.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "hooks",
+    "types",
+    ".claude-plugin",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test test/"
+  },
+  "dependencies": {
+    "ink": "^5.2.1",
+    "react": "^18.3.1"
+  }
 }

@@ -1,6 +1,5 @@
 import { ROLES, ROLE_INFO } from './core/defaults.js';
 import * as store from './core/store.js';
-import { statusSegment } from './core/status.js';
 
 const USAGE = `Usage: switchboard [command]
 
@@ -11,8 +10,7 @@ const USAGE = `Usage: switchboard [command]
   set <role> <model> [effort]  change one role in the active setup
   save <name>                  save the active setup under a new name and switch to it
   delete <setup>               delete a saved setup
-  on | off                     turn routing on/off (add --session <id> for one session only)
-  status-segment [session]     print the status line segment
+  on | off                     turn routing on/off everywhere (in a session: /router off)
 
 Roles: ${ROLES.join(', ')}
 Models: fable, opus, sonnet, haiku    Efforts: low, medium, high, xhigh, max
@@ -90,9 +88,6 @@ export async function main(argv, io = { stdout: process.stdout, stderr: process.
         }
         store.setEnabled(cmd === 'on', session || undefined);
         out(`Routing ${cmd.toUpperCase()}${session ? ' for this session' : ''}.\n`);
-        return 0;
-      case 'status-segment':
-        out(statusSegment(rest[0] || session || null));
         return 0;
       case 'help':
       case '--help':

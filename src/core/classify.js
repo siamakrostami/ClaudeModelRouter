@@ -21,15 +21,15 @@ function compile(rules) {
   return c;
 }
 
-function route(role, setup, forced, modelOverride) {
+function route(role, setup, forced, modelOverride, why = '') {
   const s = setup[role] || DEFAULT_SETUP[role];
-  return { role, model: modelOverride || s.model, effort: s.effort, agent: agentName(role), forced };
+  return { role, model: modelOverride || s.model, effort: s.effort, agent: agentName(role), forced, why };
 }
 
 /**
  * Decide which role a prompt belongs to.
  * Overrides: #self (no routing), #<role>, @<model>. Otherwise keyword scoring; ties go to ROLES order.
- * Returns {role, model, effort, agent, forced} or null for "no routing".
+ * Returns {role, model, effort, agent, forced, why} or null for "no routing".
  */
 export function classify(prompt, rules, setup) {
   if (typeof prompt !== 'string' || !prompt.trim()) return null;
@@ -38,25 +38,32 @@ export function classify(prompt, rules, setup) {
   if (/(^|\s)#self\b/i.test(text) || SELF_RE.test(text)) return null;
 
   const tag = /(?:^|\s)#(plan|review|hard|code|write|chores)\b/i.exec(text);
-  if (tag) return route(tag[1].toLowerCase(), setup, true);
+  if (tag) return route(tag[1].toLowerCase(), setup, true, undefined, tag[0].trim());
 
   const at = /(?:^|\s)@(fable|opus|sonnet|haiku)\b/i.exec(text) || PLAIN_MODEL_RE.exec(text);
   if (at) {
     const model = at[1].toLowerCase();
     const byActive = ROLES.find(r => setup[r]?.model === model);
-    if (byActive) return route(byActive, setup, true);
+    const why = at[0].trim();
+    if (byActive) return route(byActive, setup, true, undefined, why);
     const byDefault = ROLES.find(r => DEFAULT_SETUP[r].model === model) || 'code';
-    return route(byDefault, setup, true, model);
+    return route(byDefault, setup, true, model, why);
   }
 
   const res = compile(rules);
   let best = null;
   let bestScore = 0;
+  let bestWhy = '';
   for (const role of ROLES) {
-    const score = res[role].reduce((n, re) => n + (re.test(text) ? 1 : 0), 0);
-    if (score > bestScore) { best = role; bestScore = score; }
+    let score = 0;
+    let why = '';
+    for (const re of res[role]) {
+      const m = re.exec(text);
+      if (m) { score += 1; if (!why) why = m[0].trim(); }
+    }
+    if (score > bestScore) { best = role; bestScore = score; bestWhy = why; }
   }
-  return best ? route(best, setup, false) : null;
+  return best ? route(best, setup, false, undefined, bestWhy) : null;
 }
 
 /** One-line note injected into the main chat. */
