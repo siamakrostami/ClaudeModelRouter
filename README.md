@@ -66,6 +66,12 @@ Claude Model Router is a Claude Code mod:
   subagent, while the router is off, or over a pin or a `/model` choice.
 - **Claude knows which model it is.** A routed prompt carries a hidden note naming the model that
   answers it, since the system prompt names the model the session started on.
+- **Builds and tests run on a cheap model.** The router adds a `model-router:runner` agent on
+  your chores model (Haiku by default). Claude hands it builds, test runs and app launches, and
+  gets back a short report (pass or fail, the first errors with file:line) instead of the full log.
+- **Fable writes only the code that needs it.** Fable costs the most, so on Fable Claude writes
+  the core or tricky parts itself and switches to your code model for routine edits. As a cost cap,
+  after three Fable steps that edit files in one turn, the rest of the turn moves to the code model.
 - **Design and artifact checks go to Opus.** Prompts about designs, artifacts, mockups, Figma,
   UX, visuals or CSS are hard work; system design ("how should we design…", "redesign") is planning.
 - **`/router`** opens a pane with three tabs:
@@ -73,9 +79,9 @@ Claude Model Router is a Claude Code mod:
     to pin), context use, and each task's model and effort.
   - **Models**: a model and an effort dropdown for each task in the active setup, and a setup
     picker when you have more than one. Changes save to `setups.json` right away.
-  - **Usage**: each model's share of this session as a bar, with its tokens (fresh, cached,
-    written, output) and requests, subagents included; context use; your plan's 5-hour and weekly
-    limits with when they reset; and the session's cost estimate.
+  - **Usage**: each model's share of this session as a solid bar, with its tokens and requests
+    (cached, new and output underneath), subagents included; context use; your plan's 5-hour and
+    weekly limits with when they reset; and the session's cost estimate.
 
 ## Install
 

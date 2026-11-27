@@ -43,6 +43,8 @@ const available = atom({ plugin: 'model-router', key: 'available' } as const, nu
 /** A switch Claude asked for with its switch_model tool: the model the rest of this turn runs on. */
 /** Requests and tokens per model family this session, from every response (subagents included). */
 const tally = atom({ plugin: 'model-router', key: 'tally' } as const, null, { shape: 'tally-1' })
+/** Steps this turn in which Fable edited files. */
+const fableEdits = atom({ plugin: 'model-router', key: 'fableEdits' } as const, 0)
 const switched = atom({ plugin: 'model-router', key: 'switched' } as const, null, { shape: 'switched-1' })
 
 /** The active setup; an own key only, so a name like toString never reaches Object.prototype. */
@@ -200,7 +202,64 @@ export function modelNote(model: string, started?: string | null): string | null
   const name = MODEL_NAME[model]
   if (!name) return null
   const was = started && MODEL_NAME[started] && started !== model ? ` The system prompt says ${MODEL_NAME[started]}: that is the session's model, and it is out of date for this turn.` : ''
-  return `Model router: you are Claude ${name} for this turn.${was} If asked which model you are, answer Claude ${name}. If the work turns into a different kind of task (a fix, a review, a design), call switch_model with that task.`
+  const think =
+    model === 'fable'
+      ? ' Fable costs the most: write code yourself only where it needs your judgment (a core or tricky change, a subtle algorithm, a cross-cutting refactor), and call switch_model with task code before routine edits.'
+      : ''
+  return `Model router: you are Claude ${name} for this turn.${was} If asked which model you are, answer Claude ${name}.${think} Hand builds, test runs and app launches to the ${RUNNER_FULL} agent; it runs them on a cheaper model and reports back. If the work turns into a different kind of task, call switch_model with that task.`
+}
+
+/** The agent that runs builds, tests and apps on the setup's chores model and reports back. */
+const RUNNER = 'runner'
+const RUNNER_FULL = `model-router:${RUNNER}`
+const RUNNER_PROMPT = `You run builds, test suites, linters, simulators and other long commands for another agent, then report back.
+
+Run exactly what you were asked, in the folder you were given. Do not edit files, fix code or retry with changes of your own.
+
+Report in at most 15 lines:
+- the command or commands you ran
+- the result: passed, failed, or could not run, and how long it took
+- for a failure: each failing test or error with its file:line and the key line of the message, the first 10 at most
+- anything that blocked the run (a missing simulator, a signing error, a locked file)
+
+Leave out the rest of the log. Quote a line only when it carries the error.`
+
+function runnerSpec(cfg: Config | null) {
+  const slot = cfg ? slotIn(activeOf(cfg), 'chores') : null
+  return {
+    name: RUNNER,
+    description:
+      'Runs builds, test suites, linters, simulators and other long commands, and reports back only the result and the first errors with file:line. Use it instead of running a build or tests yourself, so long logs stay out of your context and run on a cheaper model.',
+    prompt: RUNNER_PROMPT,
+    tools: ['Bash', 'Read', 'Grep', 'Glob'],
+    model: slot?.model ?? 'haiku',
+    effort: slot?.effort ?? 'low',
+  }
+}
+
+/** Tools that change files. */
+const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
+/** Fable steps that may edit files in one turn before the rest of the turn moves to the code model. */
+export const FABLE_EDIT_STEPS = 3
+
+/**
+ * Fable may write the code that needs it, but not a long run of routine edits: after
+ * FABLE_EDIT_STEPS steps that edit files in one turn, the rest of the turn moves to the setup's
+ * code model.
+ */
+async function offFable($: any, out: any, used: string) {
+  if (family(used) !== 'fable') return
+  if (!out?.toolUses?.some((t: any) => EDIT_TOOLS.has(t?.name))) return
+  const n = ((await read($, fableEdits)) ?? 0) + 1
+  await update($, fableEdits, () => n)
+  if (n < FABLE_EDIT_STEPS) return
+  const cfg = await reload($)
+  const slot = slotIn(activeOf(cfg), 'code')
+  if (!slot) return
+  const model = resolveModel(slot.model, await read($, available))
+  if (model === 'fable') return
+  await update($, switched, () => ({ model, effort: slot.effort }))
+  await update($, last, (l: Route | null) => ({ role: 'code', model, effort: slot.effort, why: 'routine edits after Fable', source: 'auto' as const, switched: true }))
 }
 
 /** The tool Claude calls to change model mid-turn, as registered and as the engine names it. */
@@ -279,20 +338,14 @@ export function short(n: number) {
   return String(Math.round(n))
 }
 
-/** A bar `width` cells wide, `fraction` (0..1) of it filled. */
-function bar(fraction: number, width: number) {
-  const filled = Math.max(0, Math.min(width, Math.round(fraction * width)))
-  return { on: '▰'.repeat(filled), off: '▱'.repeat(width - filled) }
-}
-
-/** "in 2h 5m" until an ISO time; '' when unknown or past. */
+/** "resets 2h 5m" until an ISO time; '' when unknown or past. */
 function resetsIn(iso: string | undefined) {
   const at = iso ? Date.parse(iso) : NaN
   const ms = at - Date.now()
   if (!(ms > 0)) return ''
   const h = Math.floor(ms / 3.6e6)
   const m = Math.floor((ms % 3.6e6) / 6e4)
-  return h >= 24 ? `resets in ${Math.floor(h / 24)}d ${h % 24}h` : h ? `resets in ${h}h ${m}m` : `resets in ${m}m`
+  return h >= 24 ? `resets ${Math.floor(h / 24)}d ${h % 24}h` : h ? `resets ${h}h ${m}m` : `resets ${m}m`
 }
 
 const LIMIT_NAME: Record<string, string> = { five_hour: '5-hour', seven_day: 'Weekly', spend_limit: 'Spend' }
@@ -472,6 +525,7 @@ export const register: Register = on => {
     await update($, switched, () => null)
     await update($, tally, () => null)
     await $.tool.register(SWITCH_SPEC).catch(() => {})
+    await $.agent.register(runnerSpec(await read($, config))).catch(() => {})
     return next(e)
   })
 
@@ -538,6 +592,7 @@ export const register: Register = on => {
     }
     await update($, pending, () => null)
     await update($, switched, () => null)
+    await update($, fableEdits, () => 0)
     await update($, route, () => (r ? { ...r, turnId: e.turnId } : null))
     return next(e)
   })
@@ -568,6 +623,7 @@ export const register: Register = on => {
       const out = yield* next({ ...e, model: sw.model, effort: sw.effort as any })
       await recordAnswered($, out, sw)
       await count($, out).catch(() => {})
+      await offFable($, out, sw.model).catch(() => {})
       return out
     }
     const r = await read($, route)
@@ -577,6 +633,7 @@ export const register: Register = on => {
       const out = yield* next(e)
       await recordAnswered($, out, sent)
       await count($, out).catch(() => {})
+      await offFable($, out, sent.model).catch(() => {})
       return out
     }
     // The account's models may have changed since the route was decided: resolve again.
@@ -587,6 +644,7 @@ export const register: Register = on => {
     const answered = await recordAnswered($, out, { model, effort: r.effort })
     await count($, out).catch(() => {})
     if (answered && answered !== family(model)) await update($, last, (l: Route | null) => (l ? { ...l, model: answered, held: false } : l))
+    await offFable($, out, answered || model).catch(() => {})
     return out
   })
 
@@ -691,78 +749,71 @@ export const register: Register = on => {
         })
         .sort((a, b) => b.total - a.total)
       const sum = rows.reduce((n, r) => n + r.total, 0)
-      const width = narrow ? 10 : 16
       const win = usage?.context?.window
       const used = usage?.context?.tokens ?? pl?.tokens ?? null
       const pct = usage?.context?.percent ?? pl?.ctx ?? null
       const limits = (usage?.rateLimits ?? []).filter((l: any) => typeof l?.percentUsed === 'number')
       const usd = usage?.cost?.usd
+      // A solid bar of two Boxes: the track, and the fill as a share of it.
+      const solid = (key: string, fraction: number, color: string) => (
+        <Box key={key} flexGrow={1} minWidth={8} height={1} backgroundColor="subtle">
+          <Box width={`${Math.max(0, Math.min(100, Math.round(fraction * 100)))}%`} height={1} backgroundColor={color} />
+        </Box>
+      )
+      const line = (key: string, label: any, fraction: number, color: string, figure: string, note: string) => (
+        <Box key={key} gap={1} alignItems="center">
+          <Box width={7} flexShrink={0}>{label}</Box>
+          {solid(`${key}-bar`, fraction, color)}
+          <Box width={4} flexShrink={0} justifyContent="flex-end">
+            <Text weight="semibold">{figure}</Text>
+          </Box>
+          <Box width={narrow ? 12 : 18} flexShrink={0}>
+            <Text dimColor wrap="truncate-end">{note}</Text>
+          </Box>
+        </Box>
+      )
       return (
         <Box flexDirection="column">
           {header}
           {section('Models this session')}
-          <Box flexDirection="column" borderStyle="round" borderDimColor paddingX={1}>
+          <Box flexDirection="column" borderStyle="round" borderDimColor paddingX={1} gap={e.surface === 'terminal' ? 0 : 1}>
             {rows.length ? (
-              rows.map(({ f, c, total }) => {
-                const b = bar(sum ? total / sum : 0, width)
-                return (
-                  <Box key={`use-${f}`} flexDirection="column">
-                    <Box gap={1}>
-                      <Box width={7} flexShrink={0}>
-                        <Text color={MODEL_COLOR[f]} bold>{MODEL_NAME[f]}</Text>
-                      </Box>
-                      <Text>
-                        <Text color={MODEL_COLOR[f]}>{b.on}</Text>
-                        <Text dimColor>{b.off}</Text>
-                      </Text>
-                      <Text>{`${sum ? Math.round((total / sum) * 100) : 0}%`}</Text>
-                      <Text dimColor wrap="truncate-end">{`${short(total)} tokens · ${c.requests} req`}</Text>
-                    </Box>
-                    <Box paddingLeft={8}>
-                      <Text dimColor size="footnote" wrap="truncate-end">{`in ${short(c.input)} · cached ${short(c.cacheRead)} · written ${short(c.cacheWrite)} · out ${short(c.output)}`}</Text>
-                    </Box>
+              rows.map(({ f, c, total }) => (
+                <Box key={`use-${f}`} flexDirection="column">
+                  {line(`use-${f}`, <Text color={MODEL_COLOR[f]} bold>{MODEL_NAME[f]}</Text>, sum ? total / sum : 0, MODEL_COLOR[f] ?? 'gray', `${sum ? Math.round((total / sum) * 100) : 0}%`, `${short(total)} · ${c.requests} req`)}
+                  <Box paddingLeft={8}>
+                    <Text dimColor size="footnote" wrap="truncate-end">{`${short(c.cacheRead)} cached · ${short(c.input + c.cacheWrite)} new · ${short(c.output)} out`}</Text>
                   </Box>
-                )
-              })
+                </Box>
+              ))
             ) : (
               <Text dimColor>No requests yet in this session.</Text>
             )}
-            {typeof usd === 'number' ? <Text dimColor size="footnote">{`About $${usd.toFixed(2)} so far (an estimate, not your bill)`}</Text> : null}
+            {typeof usd === 'number' ? (
+              <Box justifyContent="space-between">
+                <Text dimColor size="footnote">Cost so far</Text>
+                <Text size="footnote">
+                  <Text weight="semibold">{`$${usd.toFixed(2)}`}</Text>
+                  <Text dimColor>{' estimate'}</Text>
+                </Text>
+              </Box>
+            ) : null}
           </Box>
           {pct != null ? (
             <Box flexDirection="column">
               {section('Context')}
-              <Box borderStyle="round" borderDimColor paddingX={1} gap={1} alignItems="center">
-                <Text color={ring(pct).color}>{ring(pct).glyph}</Text>
-                <Text>
-                  <Text color={gauge(pct, width).color}>{gauge(pct, width).on}</Text>
-                  <Text dimColor>{gauge(pct, width).off}</Text>
-                </Text>
-                <Text weight="semibold">{`${pct}%`}</Text>
-                {used != null && win ? <Text dimColor wrap="truncate-end">{`${short(used)} of ${short(win)}`}</Text> : null}
+              <Box borderStyle="round" borderDimColor paddingX={1} flexDirection="column">
+                {line('ctx', <Text color={ring(pct).color}>{`${ring(pct).glyph} Used`}</Text>, pct / 100, gauge(pct, 1).color, `${pct}%`, used != null && win ? `${short(used)} of ${short(win)}` : '')}
               </Box>
             </Box>
           ) : null}
           {limits.length ? (
             <Box flexDirection="column">
               {section('Plan limits')}
-              <Box flexDirection="column" borderStyle="round" borderDimColor paddingX={1}>
-                {limits.map((l: any) => {
-                  const g = gauge(l.percentUsed, width)
-                  return (
-                    <Box key={`limit-${l.kind}`} gap={1}>
-                      <Box width={7} flexShrink={0}>
-                        <Text>{LIMIT_NAME[l.kind] ?? cap(String(l.kind))}</Text>
-                      </Box>
-                      <Text>
-                        <Text color={g.color}>{g.on}</Text>
-                        <Text dimColor>{g.off}</Text>
-                      </Text>
-                      <Text>{`${Math.round(l.percentUsed)}%`}</Text>
-                      <Text dimColor wrap="truncate-end">{resetsIn(l.resetsAt)}</Text>
-                    </Box>
-                  )
-                })}
+              <Box flexDirection="column" borderStyle="round" borderDimColor paddingX={1} gap={e.surface === 'terminal' ? 0 : 1}>
+                {limits.map((l: any) =>
+                  line(`limit-${l.kind}`, <Text>{LIMIT_NAME[l.kind] ?? cap(String(l.kind))}</Text>, l.percentUsed / 100, gauge(l.percentUsed, 1).color, `${Math.round(l.percentUsed)}%`, resetsIn(l.resetsAt)),
+                )}
               </Box>
             </Box>
           ) : null}

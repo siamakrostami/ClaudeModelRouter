@@ -72,6 +72,8 @@ declare module 'claude-code' {
       switched: Shaped<Live | null>
       /** Per-model requests and tokens this session. */
       tally: Shaped<Tally | null>
+      /** Steps this turn in which Fable edited files. */
+      fableEdits: number
     }
   }
 }

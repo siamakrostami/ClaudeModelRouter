@@ -24,12 +24,13 @@ const SETUPS = `${DIR}/setups.json`
 type Rows = 'throw' | 'missing' | readonly string[]
 function engine(
   on: any,
-  opts: { model?: string; files?: Record<string, string>; env?: Record<string, string>; drop?: (text: string) => boolean; options?: Rows; tokens?: number; answered?: string; usage?: Record<string, number> } = {},
+  opts: { model?: string; files?: Record<string, string>; env?: Record<string, string>; drop?: (text: string) => boolean; options?: Rows; tokens?: number; answered?: string; usage?: Record<string, number>; edits?: boolean } = {},
 ) {
   const current: { model: string; options?: Rows; tokens?: number } = { model: opts.model ?? 'claude-fable-5', options: opts.options, tokens: opts.tokens }
   const files: Record<string, string> = { ...(opts.files ?? {}) }
   const sent: { model: string; effort: unknown; agentId?: string }[] = []
   const notes: (readonly string[] | undefined)[] = []
+  const agents: any[] = []
   mock.env(on, opts.env ?? { HOME: '/home/test' })
   on('fs.read', (_: any, e: any) => {
     if (!(e.path in files)) throw new Error('ENOENT')
@@ -41,6 +42,7 @@ function engine(
   })
   on('command.register', () => ({ value: { command: 'router' } }))
   on('tool.register', (_: any, e: any) => ({ value: { tool: `mcp__model-router__${e.name}` } }))
+  on('agent.register', (_: any, e: any) => (agents.push(e), { value: { agent: `model-router:${e.name}` } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('session.start', (_: any, e: any) => ({ cwd: e.cwd }))
   on('session.model', () => ({ value: current.model }))
@@ -62,9 +64,9 @@ function engine(
   on('turn.complete', (_: any, e: any) => ({ text: e.answer }))
   on('turn.step', async function* (_: any, e: any) {
     sent.push({ model: e.model, effort: e.effort, agentId: e.agentId })
-    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: opts.answered ? { model: opts.answered, ...(opts.usage ?? {}) } : null }
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: opts.edits && /fable/.test(String(e.model)) ? [{ name: 'Edit', input: {} }] : [], stopReason: 'end_turn', usage: opts.answered ? { model: opts.answered, ...(opts.usage ?? {}) } : null }
   })
-  return { current, files, sent, notes }
+  return { current, files, sent, notes, agents }
 }
 
 /** The band's route line, as one string. */
@@ -929,10 +931,10 @@ test('the Usage tab shows each model with a bar, its tokens and requests', async
   for (const surface of SURFACES) {
     const pane = await $.ui.mount({ ...PANE, surface })
     await pane.press({ key: 'tab-usage' })
-    for (const text of ['Haiku', '100%', '8.4k tokens · 2 req', 'in 2.0k · cached 6.0k · written 0 · out 400']) {
+    for (const text of ['Haiku', '100%', '8.4k · 2 req', '6.0k cached · 2.0k new · 400 out']) {
       expect([surface, text, !!(await pane.find({ type: 'Text', text }))]).toEqual([surface, text, true])
     }
-    expect(await pane.find({ type: 'Text', text: /^▰{10,16}$/ })).toBeDefined()
+    expect(await pane.find({ key: 'use-haiku-bar' })).toBeDefined()
     await pane.unmount()
   }
 })
@@ -952,4 +954,29 @@ test('an old rules.json adds to the built-in rules and hides none of them', asyn
   await turn($, 'check the artifacts and design', 't1') // a built-in hard rule, not in the file
   await turn($, 'a changelog entry for this', 't2') // the user's own phrase
   expect(sent.map(x => x.model)).toEqual(['opus', 'sonnet'])
+})
+
+test('a runner agent for builds and tests is registered on the chores model', async ($: any, on: any) => {
+  const { agents, notes } = engine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  expect(agents[0]).toMatchObject({ name: 'runner', model: 'haiku', effort: 'low', tools: ['Bash', 'Read', 'Grep', 'Glob'] })
+  await $.prompt.submit({ text: 'rename foo to bar' })
+  expect(notes[0]?.[0]).toContain('model-router:runner')
+})
+
+test('Fable may write code, and after three editing steps in a turn the rest moves to the code model', async ($: any, on: any) => {
+  const { sent, notes } = engine(on, { edits: true })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.prompt.submit({ text: 'plan the migration to the new API' })
+  expect(notes[0]?.[0]).toContain('write code yourself only where it needs your judgment')
+  await $.turn.start({ text: 'plan the migration to the new API', turnId: 't1' })
+  for (let i = 0; i < 4; i++) await step($, 't1') // three Fable steps edit; the fourth runs on the code model
+  expect(sent.map(x => x.model)).toEqual(['fable', 'fable', 'fable', 'sonnet'])
+  const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await route(band)).toContain('Switched')
+  await band.unmount()
+  // the count starts again with the next turn
+  await $.turn.complete({ turnId: 't1', reason: 'answer', answer: '', durationMs: 1, isAborted: false })
+  await turn($, 'plan the rollout', 't2')
+  expect(sent.at(-1)?.model).toBe('fable')
 })
