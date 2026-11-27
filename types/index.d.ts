@@ -23,6 +23,8 @@ export type Route = {
   /** Kept on the previous model (`model`) to keep its prompt cache warm, instead of `wanted`. */
   held?: boolean
   wanted?: string
+  /** Set by Claude's switch_model call, for the rest of the turn. */
+  switched?: boolean
   /** The context size, in tokens, the hold was decided at. */
   tokens?: number
 }
@@ -62,6 +64,8 @@ declare module 'claude-code' {
       base: string | null
       /** Model families the account can pick (the /config "model" row); null when unknown. */
       available: string[] | null
+      /** A model Claude switched to with switch_model; cleared when the turn ends. */
+      switched: Shaped<Live | null>
     }
   }
 }

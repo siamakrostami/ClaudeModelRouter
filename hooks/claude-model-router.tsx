@@ -40,6 +40,8 @@ const base = atom({ plugin: 'model-router', key: 'base' } as const, null)
 const tab = atom({ plugin: 'model-router', key: 'tab' } as const, 'now')
 /** Model families the account can pick, from the /config "model" row; null = unknown (all usable). */
 const available = atom({ plugin: 'model-router', key: 'available' } as const, null)
+/** A switch Claude asked for with its switch_model tool: the model the rest of this turn runs on. */
+const switched = atom({ plugin: 'model-router', key: 'switched' } as const, null, { shape: 'switched-1' })
 
 /** The active setup; an own key only, so a name like toString never reaches Object.prototype. */
 function activeOf(cfg: Config): Setup {
@@ -199,6 +201,50 @@ export function modelNote(model: string, started?: string | null): string | null
   return `Model router: you are Claude ${name} for this turn.${was} If asked which model you are, answer Claude ${name}.`
 }
 
+/** The tool Claude calls to change model mid-turn, as registered and as the engine names it. */
+const SWITCH_TOOL = 'switch_model'
+const SWITCH_FULL = `mcp__model-router__${SWITCH_TOOL}`
+const SWITCH_SPEC = {
+  name: SWITCH_TOOL,
+  description:
+    "Switch the Claude model that answers the rest of this turn. The model router already picked a model from the person's prompt; call this only when the work turns out clearly different from what that pick suits. Switch up to fable for deep planning, architecture or a careful code review, or to opus for hard debugging and tricky UI. Switch down to sonnet or haiku when what is left is routine. Don't call it for small tasks or more than once a turn. The switch lasts until this turn ends, and the next prompt is routed again. A switch makes the new model read the whole conversation again, so it costs time and tokens.",
+  inputSchema: {
+    type: 'object',
+    properties: {
+      model: { type: 'string', enum: ['fable', 'opus', 'sonnet', 'haiku'], description: 'The model to switch to.' },
+      reason: { type: 'string', description: 'A few words on why, shown to the person.' },
+    },
+    required: ['model', 'reason'],
+  },
+  isDeferred: false,
+}
+
+/** The effort the active setup gives the first role on `model`; high when no role uses it. */
+function effortFor(setup: Setup, model: string) {
+  for (const r of ROLE_LIST) if (setup[r]?.model === model) return setup[r]?.effort ?? 'high'
+  return 'high'
+}
+
+/** Serve a switch_model call: apply it for the rest of the turn, or say why not. */
+async function switchModel($: any, e: any): Promise<string> {
+  if (e.agentId !== undefined) return 'Only the main conversation can switch models. This subagent keeps its model.'
+  const cfg = await reload($)
+  if ((await read($, paused)) || !cfg.enabled) return 'The model router is off, so the model was not switched.'
+  if (await read($, manual)) return 'The person picked the model by hand with /model, so it was not switched.'
+  const pinned = await read($, pin)
+  if (pinned) return `The person pinned ${MODEL_NAME[pinned] ?? pinned} with /router, so it was not switched.`
+  const asked = String(e.model ?? '').toLowerCase()
+  if (!MODEL_LIST.includes(asked)) return 'Unknown model. Use fable, opus, sonnet or haiku.'
+  const model = resolveModel(asked, await read($, available))
+  const effort = effortFor(activeOf(cfg), model)
+  const why = clean(String(e.reason ?? ''), 40)
+  await update($, switched, () => ({ model, effort }))
+  await update($, last, (l: Route | null) => ({ role: l?.role ?? 'general', model, effort, why, source: 'auto' as const, switched: true }))
+  const name = MODEL_NAME[model] ?? model
+  const fallback = model !== asked ? ` (${MODEL_NAME[asked]} is not available on this account)` : ''
+  return `Switched to Claude ${name}${fallback}. From your next request in this turn you are Claude ${name}. The switch ends with this turn.`
+}
+
 /**
  * What the band and the pane both show: the route of the person's latest turn, or the pin,
  * or what the last request went out with. Before any request: the model the session started
@@ -218,6 +264,7 @@ function status(v: View) {
     role: mode === 'auto' && r ? r.role : mode === 'pinned' && pinned ? pinned.role : '',
     why: mode === 'auto' && r?.why ? clean(r.why, 40) : '',
     held: mode === 'auto' && !!r?.held,
+    switched: mode === 'auto' && !!r?.switched,
     tokens: mode === 'auto' && r?.held && typeof r.tokens === 'number' ? r.tokens : null,
   }
 }
@@ -252,6 +299,7 @@ function routeLine(Text: any, s: ReturnType<typeof status>, showEffort = true) {
       <Text color={color} dimColor={off} bold={!off}> {MODEL_NAME[s.model] ?? (s.model || 'Session model')}</Text>
       {s.effort && showEffort ? <Text dimColor> · {effortLabel(s.effort)}</Text> : null}
       {s.held ? <Text dimColor>{'  '}Holding</Text> : null}
+      {s.switched ? <Text dimColor>{'  '}Switched</Text> : null}
       {s.mode === 'pinned' ? <Text dimColor>{'  '}Pinned</Text> : null}
       {s.mode === 'manual' ? <Text color="warning">{'  '}Manual</Text> : null}
       {off ? <Text dimColor>{'  '}Off</Text> : null}
@@ -369,8 +417,13 @@ export const register: Register = on => {
     const startModel = family(String(await $.session.model().catch(() => '')))
     await update($, base, () => startModel || null)
     await update($, manual, () => null)
+    await update($, switched, () => null)
+    await $.tool.register(SWITCH_SPEC).catch(() => {})
     return next(e)
   })
+
+  // Claude's own switch. Answered at tool.call: it only changes this session's routing.
+  on('tool.call', { tool: SWITCH_FULL }, async ($, e) => ({ result: await switchModel($, e).catch(() => 'The switch failed; the model was not changed.') }))
 
   on('command.run', { command: 'router' }, async ($, e) => {
     const arg = e.args.trim().toLowerCase()
@@ -431,6 +484,7 @@ export const register: Register = on => {
       }
     }
     await update($, pending, () => null)
+    await update($, switched, () => null)
     await update($, route, () => (r ? { ...r, turnId: e.turnId } : null))
     return next(e)
   })
@@ -441,6 +495,7 @@ export const register: Register = on => {
       const r = await read($, route)
       if (r && r.turnId === e.turnId) await update($, route, () => null)
       await update($, pending, () => null) // a route decided for a turn that never started ends here
+      await update($, switched, () => null)
 
       await where($).catch(() => {})
       await refreshAvailable($).catch(() => {})
@@ -450,6 +505,13 @@ export const register: Register = on => {
 
   on('turn.step', async function* ($, e, next) {
     if (e.agentId !== undefined) return yield* next(e)
+    const sw = await read($, switched)
+    if (sw && !(await read($, paused))) {
+      await update($, live, () => ({ model: sw.model, effort: sw.effort }))
+      const out = yield* next({ ...e, model: sw.model, effort: sw.effort as any })
+      await recordAnswered($, out, sw)
+      return out
+    }
     const r = await read($, route)
     if (!r || r.turnId !== e.turnId || (await read($, paused))) {
       const sent: Live = { model: family(e.model), effort: typeof e.effort === 'string' ? e.effort : '' }

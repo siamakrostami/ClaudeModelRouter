@@ -58,7 +58,13 @@ Claude Model Router is a Claude Code mod:
   Opus request). From `sticky_tokens` of context (60000 by default), an automatic route keeps the
   model the last request used and only takes the new task's effort. The band then says
   **Holding**, and the pane says why. A pin, `#role`, `@model` or "use <model> for this" always
-  switches.
+  switches. Set `sticky_tokens` to `0` to route every prompt on its own words.
+- **Claude can switch too.** The router gives Claude a `switch_model` tool. When a task turns out
+  heavier or lighter than the prompt suggested, Claude can move the rest of that turn to another
+  model, and the band says **Switched**. The next prompt is routed again. It never switches in a
+  subagent, while the router is off, or over a pin or a `/model` choice.
+- **Claude knows which model it is.** A routed prompt carries a hidden note naming the model that
+  answers it, since the system prompt names the model the session started on.
 - **`/router`** opens a pane with two tabs:
   - **Overview**: what the current turn runs on and why, a **Use** picker (Auto or one model
     to pin), context use, and each task's model and effort.

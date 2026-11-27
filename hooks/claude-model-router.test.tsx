@@ -40,6 +40,7 @@ function engine(
     return { value: undefined }
   })
   on('command.register', () => ({ value: { command: 'router' } }))
+  on('tool.register', (_: any, e: any) => ({ value: { tool: `mcp__model-router__${e.name}` } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('session.start', (_: any, e: any) => ({ cwd: e.cwd }))
   on('session.model', () => ({ value: current.model }))
@@ -851,4 +852,57 @@ test('a routed prompt tells the model which model answers it; an unrouted one sa
   await $.command.run({ command: 'router', args: 'off' })
   await $.prompt.submit({ text: 'rename foo to bar' })
   expect(notes[2]).toBeUndefined()
+})
+
+const SWITCH = 'mcp__model-router__switch_model'
+
+test('Claude can switch the model for the rest of the turn; the band shows it, the next turn routes again', async ($: any, on: any) => {
+  const { sent } = engine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.prompt.submit({ text: 'rename foo to bar' }) // Haiku
+  await $.turn.start({ text: 'rename foo to bar', turnId: 't1' })
+  await step($, 't1')
+  const res = await $.tool.call({ tool: SWITCH, model: 'fable', reason: 'this needs a real design' })
+  expect(String(res.result ?? res.text)).toContain('Switched to Claude Fable')
+  await step($, 't1')
+  expect(sent.map(s => s.model)).toEqual(['haiku', 'fable'])
+  const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await route(band)).toContain('Fable')
+  expect(await route(band)).toContain('Switched')
+  await band.unmount()
+  await $.turn.complete({ turnId: 't1', reason: 'answer', answer: '', durationMs: 1, isAborted: false })
+  await $.prompt.submit({ text: 'rename baz to qux' })
+  await $.turn.start({ text: 'rename baz to qux', turnId: 't2' })
+  await step($, 't2')
+  expect(sent[2]?.model).toBe('haiku')
+})
+
+test('a switch is refused in a subagent, when paused, when pinned, and for an unknown model', async ($: any, on: any) => {
+  const { sent } = engine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const call = async (args: Record<string, unknown>) => {
+    const r = await $.tool.call({ tool: SWITCH, reason: 'x', ...args })
+    return String(r.result ?? r.text)
+  }
+  expect(await call({ model: 'fable', agentId: 'a1' })).toContain('Only the main conversation')
+  expect(await call({ model: 'gpt' })).toContain('Unknown model')
+  await $.command.run({ command: 'router', args: 'opus' })
+  expect(await call({ model: 'fable' })).toContain('pinned Opus')
+  await $.command.run({ command: 'router', args: 'auto' })
+  await $.command.run({ command: 'router', args: 'off' })
+  expect(await call({ model: 'fable' })).toContain('router is off')
+  await $.turn.start({ text: 'hi', turnId: 't1' })
+  await step($, 't1')
+  expect(sent[0]?.model).toBe('claude-fable-5')
+})
+
+test('a switch to a model the account lacks falls back and says so', async ($: any, on: any) => {
+  const { sent } = engine(on, { options: ['default', 'sonnet', 'opus', 'haiku'] })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.prompt.submit({ text: 'rename foo to bar' })
+  await $.turn.start({ text: 'rename foo to bar', turnId: 't1' })
+  const r = await $.tool.call({ tool: SWITCH, model: 'fable', reason: 'x' })
+  expect(String(r.result ?? r.text)).toContain('Claude Opus (Fable is not available')
+  await step($, 't1')
+  expect(sent[0]?.model).toBe('opus')
 })
