@@ -24,7 +24,7 @@ const SETUPS = `${DIR}/setups.json`
 type Rows = 'throw' | 'missing' | readonly string[]
 function engine(
   on: any,
-  opts: { model?: string; files?: Record<string, string>; env?: Record<string, string>; drop?: (text: string) => boolean; options?: Rows; tokens?: number } = {},
+  opts: { model?: string; files?: Record<string, string>; env?: Record<string, string>; drop?: (text: string) => boolean; options?: Rows; tokens?: number; answered?: string } = {},
 ) {
   const current: { model: string; options?: Rows; tokens?: number } = { model: opts.model ?? 'claude-fable-5', options: opts.options, tokens: opts.tokens }
   const files: Record<string, string> = { ...(opts.files ?? {}) }
@@ -60,7 +60,7 @@ function engine(
   on('turn.complete', (_: any, e: any) => ({ text: e.answer }))
   on('turn.step', async function* (_: any, e: any) {
     sent.push({ model: e.model, effort: e.effort, agentId: e.agentId })
-    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null }
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: opts.answered ? { model: opts.answered } : null }
   })
   return { current, files, sent }
 }
@@ -825,4 +825,15 @@ test('a held route is never applied to a subagent, and the first request decides
     { model: 'claude-haiku-5', effort: 'low', agentId: 'a1' },
     { model: 'opus', effort: 'low', agentId: undefined },
   ])
+})
+
+test('the band shows the model that answered, not the one asked for', async ($: any, on: any) => {
+  engine(on, { answered: 'claude-fable-5' }) // the engine ignores the swap and answers on Fable
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.prompt.submit({ text: 'rename foo to bar' }) // routes to Haiku
+  await $.turn.start({ text: 'rename foo to bar', turnId: 't1' })
+  await step($, 't1')
+  const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await route(band)).toContain('Fable')
+  await band.unmount()
 })

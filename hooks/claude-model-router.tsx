@@ -179,6 +179,16 @@ type View = {
 }
 
 /**
+ * Record the model that really answered a step (the response's usage.model) as what the band
+ * shows as live; returns its family, or '' when the response carried none.
+ */
+async function recordAnswered($: any, out: any, sent: Live): Promise<string> {
+  const answered = family(out?.usage?.model)
+  if (answered) await update($, live, () => ({ model: answered, effort: sent.effort }))
+  return answered
+}
+
+/**
  * What the band and the pane both show: the route of the person's latest turn, or the pin,
  * or what the last request went out with. Before any request: the model the session started
  * on, with no effort (it is not known yet).
@@ -429,12 +439,18 @@ export const register: Register = on => {
     if (!r || r.turnId !== e.turnId || (await read($, paused))) {
       const sent: Live = { model: family(e.model), effort: typeof e.effort === 'string' ? e.effort : '' }
       await update($, live, () => sent)
-      return yield* next(e)
+      const out = yield* next(e)
+      await recordAnswered($, out, sent)
+      return out
     }
     // The account's models may have changed since the route was decided: resolve again.
     const model = resolveModel(r.model, await read($, available))
     await update($, live, () => ({ model, effort: r.effort }))
-    return yield* next({ ...e, model, effort: r.effort as any })
+    const out = yield* next({ ...e, model, effort: r.effort as any })
+    // The band must show the model that answered, not the one asked for: if they differ, the answer wins.
+    const answered = await recordAnswered($, out, { model, effort: r.effort })
+    if (answered && answered !== family(model)) await update($, last, (l: Route | null) => (l ? { ...l, model: answered, held: false } : l))
+    return out
   })
 
   // ---- the band above the prompt: one row, route on the left, controls on the right ----
