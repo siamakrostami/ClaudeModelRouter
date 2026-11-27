@@ -29,6 +29,7 @@ function engine(
   const current: { model: string; options?: Rows; tokens?: number } = { model: opts.model ?? 'claude-fable-5', options: opts.options, tokens: opts.tokens }
   const files: Record<string, string> = { ...(opts.files ?? {}) }
   const sent: { model: string; effort: unknown; agentId?: string }[] = []
+  const notes: (readonly string[] | undefined)[] = []
   mock.env(on, opts.env ?? { HOME: '/home/test' })
   on('fs.read', (_: any, e: any) => {
     if (!(e.path in files)) throw new Error('ENOENT')
@@ -55,14 +56,14 @@ function engine(
     if (current.tokens === undefined) throw new Error('no usage yet')
     return { value: { context: { tokens: current.tokens, window: 200000, percent: Math.round((current.tokens / 200000) * 100) } } }
   })
-  on('prompt.submit', (_: any, e: any) => (opts.drop?.(e.text) ? { drop: 'blocked beneath' } : e))
+  on('prompt.submit', (_: any, e: any) => (notes.push(e.context), opts.drop?.(e.text) ? { drop: 'blocked beneath' } : e))
   on('turn.start', (_: any, e: any) => ({ turnId: e.turnId }))
   on('turn.complete', (_: any, e: any) => ({ text: e.answer }))
   on('turn.step', async function* (_: any, e: any) {
     sent.push({ model: e.model, effort: e.effort, agentId: e.agentId })
     return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: opts.answered ? { model: opts.answered } : null }
   })
-  return { current, files, sent }
+  return { current, files, sent, notes }
 }
 
 /** The band's route line, as one string. */
@@ -836,4 +837,18 @@ test('the band shows the model that answered, not the one asked for', async ($: 
   const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
   expect(await route(band)).toContain('Fable')
   await band.unmount()
+})
+
+test('a routed prompt tells the model which model answers it; an unrouted one says nothing', async ($: any, on: any) => {
+  const { notes } = engine(on) // the session runs on Fable
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.prompt.submit({ text: 'rename foo to bar' }) // routes to Haiku
+  expect(notes[0]).toEqual([expect.stringContaining('you are Claude Haiku for this turn')])
+  expect(notes[0]?.[0]).toContain('The system prompt says Fable')
+  await $.prompt.submit({ text: '#plan the migration' }) // routes to Fable, the session's own model
+  expect(notes[1]?.[0]).toContain('you are Claude Fable for this turn')
+  expect(notes[1]?.[0]).not.toContain('out of date')
+  await $.command.run({ command: 'router', args: 'off' })
+  await $.prompt.submit({ text: 'rename foo to bar' })
+  expect(notes[2]).toBeUndefined()
 })

@@ -189,6 +189,17 @@ async function recordAnswered($: any, out: any, sent: Live): Promise<string> {
 }
 
 /**
+ * The note a routed prompt carries for the model, never shown to the person. The system prompt
+ * names the session's starting model, so without it a routed turn says it is that model.
+ */
+export function modelNote(model: string, started?: string | null): string | null {
+  const name = MODEL_NAME[model]
+  if (!name) return null
+  const was = started && MODEL_NAME[started] && started !== model ? ` The system prompt says ${MODEL_NAME[started]}: that is the session's model, and it is out of date for this turn.` : ''
+  return `Model router: you are Claude ${name} for this turn.${was} If asked which model you are, answer Claude ${name}.`
+}
+
+/**
  * What the band and the pane both show: the route of the person's latest turn, or the pin,
  * or what the last request went out with. Before any request: the model the session started
  * on, with no effort (it is not known yet).
@@ -390,9 +401,13 @@ export const register: Register = on => {
   on('prompt.submit', async ($, e, next) => {
     where($).catch(() => {}) // the band's repo and context: refreshed, never waited for
     await routeSubmit($, e).catch(() => {}) // best effort: on any failure the prompt goes through unrouted
+    // A prompt that starts a routed turn tells the model which model answers it.
+    const p = e.turnId === undefined ? await read($, pending).catch(() => null) : null
+    const note = p?.route ? modelNote(resolveModel(p.route.model, await read($, available)), family(String(await $.session.model().catch(() => '')))) : null
+    const sent = note ? { ...e, context: [...(e.context ?? []), note] } : e
     let result: Awaited<ReturnType<typeof next>>
     try {
-      result = await next(e)
+      result = await next(sent)
     } catch (err) {
       if (e.turnId === undefined) await update($, pending, () => null).catch(() => {})
       throw err
