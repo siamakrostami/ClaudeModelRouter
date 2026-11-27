@@ -1,4 +1,4 @@
-import { DEFAULT_RULES, DEFAULT_SETUP, EFFORTS, MODELS, ROLES } from '../src/core/defaults.js'
+import { DEFAULT_RULES, DEFAULT_SETUP, EFFORTS, MODELS, ROLES, SCORED_ROLES, stickyOf } from '../src/core/defaults.js'
 import { isSetupName } from '../src/core/safe.js'
 
 import type { Config, Setup } from '../types'
@@ -66,7 +66,10 @@ export async function readJson($: any, path: string) {
   }
 }
 
-/** Read setups.json and rules.json (same files the claude-model-router CLI edits), filling defaults. */
+/**
+ * Read setups.json and rules.json (same files the claude-model-router CLI edits), filling defaults.
+ * A setup without `general` (written before 0.4.0) gets the default general.
+ */
 export async function loadConfig($: any): Promise<Config> {
   const dir = await home($)
   const parsed = dir ? await readJson($, `${dir}/setups.json`) : null
@@ -81,7 +84,7 @@ export async function loadConfig($: any): Promise<Config> {
   const parsedRules = dir ? await readJson($, `${dir}/rules.json`) : null
   const rulesRaw = isObj(parsedRules) ? parsedRules : {}
   const rules: Record<string, string[]> = {}
-  for (const r of ROLE_LIST) {
+  for (const r of SCORED_ROLES) {
     const v = Object.hasOwn(rulesRaw, r) ? rulesRaw[r] : undefined
     rules[r] = Array.isArray(v) && v.every((x: unknown) => typeof x === 'string') ? v : (DEFAULT_RULES as any)[r]
   }
@@ -90,6 +93,7 @@ export async function loadConfig($: any): Promise<Config> {
     enabled: raw.enabled !== false,
     setups,
     rules,
+    sticky: stickyOf(raw.sticky_tokens),
   }
 }
 

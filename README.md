@@ -15,8 +15,18 @@ sends that turn to the model and effort that suit it:
 | code | regular code, tests, refactors | Sonnet · medium |
 | write | PR descriptions, Slack, docs, tickets | Sonnet · medium |
 | chores | git, renames, formatting, lookups, commit messages | Haiku · low |
+| general | everything else | Sonnet · medium |
 
-A prompt that matches no role stays on the model the session runs on.
+A prompt that matches no role goes to **general**, so everyday questions run on Sonnet and Fable is
+kept for planning, reviews and heavy thinking ("think hard", "deep dive", "redesign", "from
+scratch"). The one exception is staying in flow: right after a **hard**, **code** or **write**
+turn, an unmatched prompt keeps that role. Short replies such as "yes go ahead", "ok", "fix this"
+or "try again" follow what the session is doing instead of their words: after a plan or a review
+they mean "implement it" (code), otherwise they keep the previous role.
+
+If your account cannot use a model (Fable is not on every plan), the router uses the next one
+down: Fable → Opus → Sonnet → Haiku (Opus falls back to Sonnet, Sonnet and Haiku to each other).
+Your setups are not rewritten; the swap happens per request, and the pane says so in one line.
 
 ## How it works
 
@@ -36,11 +46,19 @@ Claude Model Router is a Claude Code mod:
   ```
 
   On the left, an effort meter, the model and the effort, plus a badge when routing is
-  **Pinned** to a model, **Manual** (you switched with `/model`) or **Off**. On the right, the
+  **Pinned** to a model, **Holding** the previous model (see below), **Manual** (you switched
+  with `/model`) or **Off**. On the right, the
   repo and branch (cut short, or hidden when the row is narrow), how full the context window is,
   an **Auto ▾** button (it shows the pinned model when there is one) that opens the pane, and
   a gear that opens the pane on its Models tab. Before the first turn it shows the model the
   session started on, with no effort.
+- **Long conversations stay on one model.** Each model keeps its own prompt cache, so the first
+  switch in a long session re-sends the whole conversation at full price (in a 100k-token
+  session about $0.25–0.40 to move to Sonnet and $1–1.60 to Fable, against about $0.02 for one more
+  Opus request). From `sticky_tokens` of context (60000 by default), an automatic route keeps the
+  model the last request used and only takes the new task's effort. The band then says
+  **Holding**, and the pane says why. A pin, `#role`, `@model` or "use <model> for this" always
+  switches.
 - **`/router`** opens a pane with two tabs:
   - **Overview**: what the current turn runs on and why, a **Use** picker (Auto or one model
     to pin), context use, and each task's model and effort.
@@ -62,7 +80,7 @@ and the same `claude plugin install` line. Needs Claude Code 2.1.330 or newer.
 
 Just type. To steer one prompt, put one of these at the start or end of the prompt:
 
-- `#plan` `#review` `#hard` `#code` `#write` `#chores`: force a role
+- `#plan` `#review` `#hard` `#code` `#write` `#chores` `#general`: force a role
 - `@fable` `@opus` `@sonnet` `@haiku`: force a model
 - `#self`: stay on the session's model
 
@@ -81,6 +99,9 @@ In a session:
 If you switch models yourself with `/model`, Claude Model Router steps aside (the band says
 Manual) until you switch back to the model the session started on.
 
+Only the main chat is routed. Subagents are left alone, so the router works next to agents that
+pin their own model.
+
 From a terminal (these change `setups.json`, which every session reads at its next prompt):
 
 ```bash
@@ -92,7 +113,30 @@ claude-model-router use default
 claude-model-router delete fast
 claude-model-router off | on             # everywhere; /router off pauses one session
 claude-model-router rules                # write the default rules to rules.json to edit
+claude-model-router presets              # add the ready-made setups (see Presets)
 ```
+
+The CLI cannot see which models your account offers, so it stores setups as you choose them; a
+session swaps a model it cannot use when it sends the request.
+
+## Presets
+
+`presets/setups.json` ships three setups:
+
+| Setup | What it is for |
+|---|---|
+| default | the defaults above: Fable plans and reviews, Opus does hard work, Sonnet the rest, Haiku chores |
+| economy | no Fable at all: Opus plans, reviews and does hard work, Sonnet codes and writes (low effort for writing and general) |
+| deep | more thinking: Fable for plan, review and hard, Opus for code and general |
+
+`claude-model-router presets` adds every preset whose name you do not have yet. It never changes
+a setup you have or which one is active. Switch with `claude-model-router use economy`, or pick
+the setup in the pane's Models tab.
+
+Installed as a plugin only, without the CLI? Copy `presets/setups.json` from the repo to
+`~/.claude/claude-model-router/setups.json` (this replaces the file, so only do it when you have
+no setups of your own). Once the file has more than one setup, the pane's Models tab shows a
+setup picker to switch between them.
 
 ## Data and custom rules
 
@@ -100,8 +144,10 @@ Data lives in `~/.claude/claude-model-router/` (on Windows, under `%USERPROFILE%
 also honours `CLAUDE_MODEL_ROUTER_HOME` (an absolute path) for your own use and for tests; the
 mod ignores it and always uses the folder under your home.
 
-- `setups.json`: the saved setups, the active one, and the global on/off. The CLI and the pane
-  both edit it; a pane edit re-reads the file first, so a setup saved from the CLI is kept. A file
+- `setups.json`: the saved setups, the active one, the global on/off, and `sticky_tokens` (a
+  whole number, 60000 by default; 0 turns holding off; edit it by hand). A setup written before
+  0.4.0 has no `general` and gets the default for it. The CLI and the pane both edit it, and both
+  keep keys they do not change; a pane edit re-reads the file first, so a setup saved from the CLI is kept. A file
   that does not parse is copied to `setups.json.bak-<time>` before it is replaced (never through a
 symlink, and never over an older backup). Setup names use letters, digits, `-`, `_` and `.`
 (up to 40); other names in the file are ignored.
@@ -129,7 +175,8 @@ to a list of entries:
 - Your own entries are skipped when longer than 200 characters. At most 50 per role are used,
   and they look at the first 1000 characters of the prompt (built-in rules look at 4000).
 - Each entry that matches adds 1 to its role. The highest score wins; a tie goes to the more
-  capable role (plan, review, hard, code, write, chores in that order).
+  capable role (plan, review, hard, code, write, chores in that order). `general` has no rules
+  (a `general` list in `rules.json` is ignored); it takes what matches nothing.
 - Chores (Haiku, low effort by default) only win when no other role matched and the prompt is
   short (12 words or fewer) or opens with a mechanical verb such as rename, bump, move, format,
   lint or "write a commit message".
@@ -137,7 +184,8 @@ to a list of entries:
 
 ## Security notes
 
-- The mod makes no network calls and spawns no processes.
+- The mod makes no network calls and spawns no processes. To know which models your account
+  offers it reads the `/config` model row's options, as `/model` lists them.
 - The plugin reads only two environment variables, `HOME` and `USERPROFILE`, and uses the first
   that is an absolute path; with neither it uses the built-in defaults and writes nothing.
   `CLAUDE_MODEL_ROUTER_HOME` is CLI-only, so a repo's `.claude/settings.json` cannot point the

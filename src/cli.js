@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { ROLES, ROLE_INFO } from './core/defaults.js';
 import * as store from './core/store.js';
 import { clean } from './core/safe.js';
@@ -13,10 +15,38 @@ const USAGE = `Usage: claude-model-router [command]
   delete <setup>               delete a saved setup
   on | off                     turn routing on/off everywhere (one session only: /router off)
   rules                        write the default keyword rules to rules.json to edit
+  presets                      add the ready-made setups (default, economy, deep) you do not have yet
 
 Roles: ${ROLES.join(', ')}
 Models: fable, opus, sonnet, haiku    Efforts: low, medium, high, xhigh, max
+Only the main chat is routed: subagents are left alone, so agents that pin their own model keep it.
 `;
+
+/** The presets file shipped next to src/. */
+const PRESETS_FILE = fileURLToPath(new URL('../presets/setups.json', import.meta.url));
+
+function presetsText(file) {
+  let data;
+  try {
+    data = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (e) {
+    throw new Error(`could not read the presets file (${clean(e?.message, 120)})`);
+  }
+  let res;
+  try {
+    res = store.addPresets(data);
+  } catch (e) {
+    throw new Error(`unexpected presets file: ${e.message}`);
+  }
+  const { added, kept } = res;
+  const lines = [];
+  if (added.length) lines.push(`Added: ${added.map(n => clean(n, 40)).join(', ')}.`);
+  if (kept.length) lines.push(`${kept.map(n => clean(n, 40)).join(', ')} already there, left as is.`);
+  if (!added.length) lines.push('Nothing new to add.');
+  const example = added.find(n => n !== store.activeName()) ?? 'economy';
+  lines.push(`Active setup is still "${clean(store.activeName(), 40)}". Switch with: claude-model-router use ${clean(example, 40)} (or the Models tab of /router).`);
+  return lines.join('\n') + '\n';
+}
 
 function showText() {
   const s = store.activeSetup();
@@ -31,8 +61,9 @@ function showText() {
 const NAMED = { save: '<name>', use: '<setup>', delete: '<setup>' };
 
 /**
- * Run the CLI. io = {stdout, stderr, isTTY, loadPicker?}. Returns the exit code.
- * loadPicker imports the Ink picker; tests pass one that fails.
+ * Run the CLI. io = {stdout, stderr, isTTY, loadPicker?, presetsFile?}. Returns the exit code.
+ * loadPicker imports the Ink picker; tests pass one that fails. presetsFile replaces the shipped
+ * presets/setups.json (tests).
  */
 export async function main(argv, io = { stdout: process.stdout, stderr: process.stderr, isTTY: process.stdout.isTTY && process.stdin.isTTY }) {
   const [cmd, ...rest] = argv.filter(a => a !== '');
@@ -98,6 +129,9 @@ export async function main(argv, io = { stdout: process.stdout, stderr: process.
           : `${path} already exists; edit it (delete it and run this again to start from the defaults).\n`);
         return 0;
       }
+      case 'presets':
+        out(presetsText(io.presetsFile ?? PRESETS_FILE));
+        return 0;
       case 'help':
       case '--help':
       case '-h':

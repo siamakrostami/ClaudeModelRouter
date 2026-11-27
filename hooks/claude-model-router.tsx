@@ -2,6 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { PromptSubmitInput, Register } from 'claude-code'
 
 import { classify } from '../src/core/classify.js'
+import { availableFrom, resolveModel } from '../src/core/models.js'
 import { clean, fingerprint } from '../src/core/safe.js'
 import type { Config, Live, Place, Route, Setup } from '../types'
 import {
@@ -18,7 +19,7 @@ import {
 
 const PANE = 'claude-model-router'
 
-const config = atom({ plugin: 'model-router', key: 'config' } as const, null, { shape: 'config-2' })
+const config = atom({ plugin: 'model-router', key: 'config' } as const, null, { shape: 'config-3' })
 /** The route `turn.step` applies, bound to one turn by id and cleared when that turn completes. */
 const route = atom({ plugin: 'model-router', key: 'route' } as const, null, { shape: 'route-2' })
 /** The route of the person's latest turn, for the band and the pane to show. Never applied. */
@@ -37,6 +38,8 @@ const pin = atom({ plugin: 'model-router', key: 'pin' } as const, null)
 const place = atom({ plugin: 'model-router', key: 'place' } as const, null)
 const base = atom({ plugin: 'model-router', key: 'base' } as const, null)
 const tab = atom({ plugin: 'model-router', key: 'tab' } as const, 'now')
+/** Model families the account can pick, from the /config "model" row; null = unknown (all usable). */
+const available = atom({ plugin: 'model-router', key: 'available' } as const, null)
 
 /** The active setup; an own key only, so a name like toString never reaches Object.prototype. */
 function activeOf(cfg: Config): Setup {
@@ -68,12 +71,43 @@ async function edit($: any, fn: (cfg: Config) => Config) {
   await update($, config, () => cfg)
 }
 
-/** Pinned to a model: the effort of the first task that runs on it, else high. */
-function pinRoute(setup: Setup, pinned: string): Route {
-  const role = ROLE_LIST.find(r => slotIn(setup, r)?.model === pinned) ?? 'code'
+/**
+ * Pinned to a model (or, when the account cannot use it, its fallback): the effort of the first
+ * task that runs on that model, else high.
+ */
+function pinRoute(setup: Setup, pinned: string, avail: readonly string[] | null): Route {
+  const model = resolveModel(pinned, avail)
+  const role = ROLE_LIST.find(r => slotIn(setup, r)?.model === model) ?? 'code'
   const slot = slotIn(setup, role)
-  const effort = slot?.model === pinned ? slot.effort : 'high'
-  return { role, model: pinned, effort, why: '', source: 'pin' }
+  const effort = slot?.model === model ? slot.effort : 'high'
+  return { role, model, effort, why: '', source: 'pin' }
+}
+
+/**
+ * Read which model families the account can pick: the /config "model" row's options, as /model
+ * offers them. A missing row, a failed call or no family found leaves it unknown (null), and
+ * unknown means every model is used as set: a failed probe never breaks routing.
+ */
+async function refreshAvailable($: any) {
+  const rows = await Promise.resolve()
+    .then(() => $.config.list())
+    .catch(() => null)
+  const found = availableFrom(rows)
+  await update($, available, () => found)
+}
+
+/**
+ * In a long conversation, switching model re-sends the whole conversation at full price (each
+ * model keeps its own prompt cache). From `sticky` tokens of context, an automatic route keeps the
+ * model the last main-chat request used, with the chosen task's effort. A forced route (#role,
+ * @model, "use <model> for this") and a pin always switch; the first request never holds.
+ */
+async function hold($: any, r: Route, sticky: number): Promise<Route> {
+  if (r.source !== 'auto' || r.forced || sticky <= 0) return r
+  const tokens = (await read($, place))?.tokens
+  const prev = family((await read($, live))?.model ?? '')
+  if (typeof tokens !== 'number' || tokens < sticky || !prev || prev === family(r.model)) return r
+  return { ...r, model: prev, held: true, wanted: r.model, tokens }
 }
 
 /**
@@ -103,12 +137,15 @@ async function decide($: any, text: string, isCommand: boolean) {
   await update($, manual, () => (isManual ? sessionModel : null))
   if (!cfg.enabled || isManual || (await read($, paused))) return null
   const setup = activeOf(cfg)
+  const avail = await read($, available)
   const pinned = await read($, pin)
-  if (pinned && MODEL_LIST.includes(pinned)) return pinRoute(setup, pinned)
+  if (pinned && MODEL_LIST.includes(pinned)) return pinRoute(setup, pinned, avail)
   if (isCommand) return null
-  const r = classify(text, cfg.rules, setup)
+  const previousRole = (await read($, last))?.role
+  const r = classify(text, cfg.rules, setup, { previousRole })
   if (!r) return null
-  return { role: r.role, model: r.model, effort: r.effort, why: r.why, source: 'auto' } as Route
+  const chosen: Route = { role: r.role, model: resolveModel(r.model, avail), effort: r.effort, why: r.why, source: 'auto', forced: r.forced }
+  return hold($, chosen, cfg.sticky)
 }
 
 /** Turn routing on or off from the pane. On also clears a saved "enabled: false". */
@@ -130,7 +167,16 @@ async function setSlot($: any, role: string, field: 'model' | 'effort', value: s
 }
 
 type Mode = 'auto' | 'pinned' | 'main' | 'manual' | 'off'
-type View = { cfg: Config; last: Route | null; live: Live | null; paused: boolean; manual: string | null; pin: string | null; base: string | null }
+type View = {
+  cfg: Config
+  last: Route | null
+  live: Live | null
+  paused: boolean
+  manual: string | null
+  pin: string | null
+  base: string | null
+  available: string[] | null
+}
 
 /**
  * What the band and the pane both show: the route of the person's latest turn, or the pin,
@@ -139,7 +185,7 @@ type View = { cfg: Config; last: Route | null; live: Live | null; paused: boolea
  */
 function status(v: View) {
   const { cfg, last: r, live: l, manual: man } = v
-  const pinned = v.pin && MODEL_LIST.includes(v.pin) ? pinRoute(activeOf(cfg), v.pin) : null
+  const pinned = v.pin && MODEL_LIST.includes(v.pin) ? pinRoute(activeOf(cfg), v.pin, v.available) : null
   const mode: Mode = v.paused || !cfg.enabled ? 'off' : man ? 'manual' : pinned ? 'pinned' : r ? 'auto' : 'main'
   const idle = l ?? { model: v.base ?? '', effort: '' }
   const shown =
@@ -150,6 +196,8 @@ function status(v: View) {
     effort: shown.effort,
     role: mode === 'auto' && r ? r.role : mode === 'pinned' && pinned ? pinned.role : '',
     why: mode === 'auto' && r?.why ? clean(r.why, 40) : '',
+    held: mode === 'auto' && !!r?.held,
+    tokens: mode === 'auto' && r?.held && typeof r.tokens === 'number' ? r.tokens : null,
   }
 }
 
@@ -162,6 +210,7 @@ async function view($: any, cfg: Config): Promise<View> {
     manual: await read($, manual),
     pin: await read($, pin),
     base: await read($, base),
+    available: await read($, available),
   }
 }
 
@@ -181,6 +230,7 @@ function routeLine(Text: any, s: ReturnType<typeof status>, showEffort = true) {
       <Text dimColor>{m.off}</Text>
       <Text color={color} dimColor={off} bold={!off}> {MODEL_NAME[s.model] ?? (s.model || 'Session model')}</Text>
       {s.effort && showEffort ? <Text dimColor> · {effortLabel(s.effort)}</Text> : null}
+      {s.held ? <Text dimColor>{'  '}Holding</Text> : null}
       {s.mode === 'pinned' ? <Text dimColor>{'  '}Pinned</Text> : null}
       {s.mode === 'manual' ? <Text color="warning">{'  '}Manual</Text> : null}
       {off ? <Text dimColor>{'  '}Off</Text> : null}
@@ -253,13 +303,17 @@ async function repoOf($: any, dir: string) {
 async function where($: any) {
   const dir = String(await $.session.cwd().catch(() => '')) || String(await $.session.root())
   const repo = await repoOf($, dir)
-  const usage = await $.session.usage().catch(() => null)
+  const usage = await Promise.resolve()
+    .then(() => $.session.usage())
+    .catch(() => null)
   const pct = usage?.context?.percent
+  const tokens = usage?.context?.tokens
   // Folder and branch names come from disk: no control bytes reach the band.
   const value: Place = {
     project: clean(repo?.name ?? dir.split('/').filter(Boolean).pop() ?? dir, PLACE_MAX),
     branch: repo?.branch ? clean(repo.branch, PLACE_MAX) : null,
     ctx: typeof pct === 'number' ? pct : null,
+    tokens: typeof tokens === 'number' ? tokens : null,
   }
   await update($, place, () => value)
 }
@@ -288,6 +342,7 @@ export const register: Register = on => {
     await update($, route, () => null)
     await update($, pending, () => null)
     await update($, queued, () => null)
+    await refreshAvailable($).catch(() => {})
     await reload($).catch(() => {})
     await where($).catch(() => {})
     const startModel = family(String(await $.session.model().catch(() => '')))
@@ -312,7 +367,9 @@ export const register: Register = on => {
     }
     if (MODEL_LIST.includes(arg)) {
       await update($, pin, () => arg)
-      return { text: `Claude Model Router: every turn uses ${MODEL_NAME[arg]}. /router auto to undo.` }
+      const used = resolveModel(arg, await read($, available))
+      const note = used === arg ? '' : ` (${MODEL_NAME[arg]} isn't available on this account)`
+      return { text: `Claude Model Router: every turn uses ${MODEL_NAME[used]}${note}. /router auto to undo.` }
     }
     if (arg) return { text: `Claude Model Router: unknown option "${arg}". ${USAGE}` }
     await reload($).catch(() => {})
@@ -361,6 +418,7 @@ export const register: Register = on => {
       await update($, pending, () => null) // a route decided for a turn that never started ends here
 
       await where($).catch(() => {})
+      await refreshAvailable($).catch(() => {})
     }
     return result
   })
@@ -373,8 +431,10 @@ export const register: Register = on => {
       await update($, live, () => sent)
       return yield* next(e)
     }
-    await update($, live, () => ({ model: r.model, effort: r.effort }))
-    return yield* next({ ...e, model: r.model, effort: r.effort as any })
+    // The account's models may have changed since the route was decided: resolve again.
+    const model = resolveModel(r.model, await read($, available))
+    await update($, live, () => ({ model, effort: r.effort }))
+    return yield* next({ ...e, model, effort: r.effort as any })
   })
 
   // ---- the band above the prompt: one row, route on the left, controls on the right ----
@@ -412,7 +472,7 @@ export const register: Register = on => {
                 <Text dimColor={pl.ctx < 60} color={pl.ctx >= 60 ? ring(pl.ctx).color : undefined}> {pl.ctx}%</Text>
               </Text>
             ) : null}
-            <Button key="pin" label={pinned ? `${MODEL_NAME[pinned] ?? cap(pinned)} ▾` : 'Auto ▾'} plain onPress={() => openPane($, 'now')} />
+            <Button key="pin" label={pinned ? `${MODEL_NAME[resolveModel(pinned, seen.available)] ?? cap(pinned)} ▾` : 'Auto ▾'} plain onPress={() => openPane($, 'now')} />
             <Button key="settings" label="⚙️" plain onPress={() => openPane($, 'routes')} />
           </Box>
         </Box>
@@ -435,6 +495,9 @@ export const register: Register = on => {
     const setup = activeOf(cfg)
     const slotOf = (role: string) => slotIn(setup, role) ?? { model: '', effort: '' }
     const startedOn = seen.base
+    // Only models the account can pick are offered, plus the one already chosen (never changed silently).
+    const avail = seen.available
+    const offered = (chosen: string | null) => MODEL_LIST.filter(v => !avail || avail.includes(v) || v === chosen)
     // The Models rows need ~49 columns side by side; a narrower dock stacks each row in two lines.
     const narrow = (e.props.bodyColumns ?? 60) < 50
 
@@ -464,6 +527,10 @@ export const register: Register = on => {
     )
 
     if (current === 'routes') {
+      // One dim line when this setup names a model the account cannot use; nothing otherwise.
+      const swaps = [...new Set(ROLE_LIST.map(r => slotOf(r).model))]
+        .filter(m => MODEL_LIST.includes(m) && resolveModel(m, avail) !== m)
+        .map(m => `${MODEL_NAME[m]} isn't available on this account, so ${MODEL_NAME[resolveModel(m, avail)]} is used instead.`)
       return (
         <Box flexDirection="column">
           {header}
@@ -473,7 +540,7 @@ export const register: Register = on => {
               const slot = slotOf(role)
               const modelPick = (
                 <Box width={14} flexShrink={0} flexDirection="column" marginRight={1}>
-                  <Select key={`model-${role}`} options={MODEL_LIST.map(v => ({ value: v, label: padLabel(MODEL_NAME[v] ?? v, MODEL_LIST.map(x => MODEL_NAME[x] ?? x), e.surface) }))} value={slot.model} onSelect={v => setSlot($, role, 'model', v)} />
+                  <Select key={`model-${role}`} options={offered(slot.model).map(v => ({ value: v, label: padLabel(MODEL_NAME[v] ?? v, MODEL_LIST.map(x => MODEL_NAME[x] ?? x), e.surface) }))} value={slot.model} onSelect={v => setSlot($, role, 'model', v)} />
                 </Box>
               )
               const effortPick = (
@@ -514,6 +581,11 @@ export const register: Register = on => {
               )
             })}
           </Box>
+          {swaps.length ? (
+            <Text dimColor size="footnote">
+              {swaps.join(' ')}
+            </Text>
+          ) : null}
           {Object.keys(cfg.setups).length > 1 ? (
             <Box flexDirection="column">
               {section('Setup')}
@@ -544,6 +616,11 @@ export const register: Register = on => {
             <Text dimColor>{m.off}</Text>
             <Text dimColor size="footnote">{s.effort ? `  ${effortLabel(s.effort)} effort` : ''}{s.why ? `  ← ${clean(s.why, 40)}` : ''}</Text>
           </Text>
+          {s.held && s.tokens != null ? (
+            <Text dimColor size="footnote">
+              {`Staying on ${MODEL_NAME[s.model] ?? s.model} to keep its cache warm (conversation is ${Math.round(s.tokens / 1000)}k tokens).`}
+            </Text>
+          ) : null}
           {s.mode === 'manual' ? (
             <Text color="warning" size="footnote" wrap="truncate-end">
               {startedOn ? `/model ${startedOn} to resume routing` : 'Switch back with /model to resume routing'}
@@ -556,7 +633,7 @@ export const register: Register = on => {
           <Box width={20} flexDirection="column">
             <Select
               key="use"
-              options={[{ value: 'auto', label: 'Auto' }, ...MODEL_LIST.map(v => ({ value: v, label: MODEL_NAME[v] }))]}
+              options={[{ value: 'auto', label: 'Auto' }, ...offered(pinned).map(v => ({ value: v, label: MODEL_NAME[v] }))]}
               value={pinned ?? 'auto'}
               onSelect={v => update($, pin, () => (v === 'auto' ? null : v))}
             />

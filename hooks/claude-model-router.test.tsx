@@ -21,8 +21,12 @@ const SETUPS = `${DIR}/setups.json`
  * Stand in for the engine: an in-memory disk (empty unless `files` says otherwise), the
  * session's model, and the bottom of turn.step that records what each request went out with.
  */
-function engine(on: any, opts: { model?: string; files?: Record<string, string>; env?: Record<string, string>; drop?: (text: string) => boolean } = {}) {
-  const current = { model: opts.model ?? 'claude-fable-5' }
+type Rows = 'throw' | 'missing' | readonly string[]
+function engine(
+  on: any,
+  opts: { model?: string; files?: Record<string, string>; env?: Record<string, string>; drop?: (text: string) => boolean; options?: Rows; tokens?: number } = {},
+) {
+  const current: { model: string; options?: Rows; tokens?: number } = { model: opts.model ?? 'claude-fable-5', options: opts.options, tokens: opts.tokens }
   const files: Record<string, string> = { ...(opts.files ?? {}) }
   const sent: { model: string; effort: unknown; agentId?: string }[] = []
   mock.env(on, opts.env ?? { HOME: '/home/test' })
@@ -38,6 +42,19 @@ function engine(on: any, opts: { model?: string; files?: Record<string, string>;
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('session.start', (_: any, e: any) => ({ cwd: e.cwd }))
   on('session.model', () => ({ value: current.model }))
+  // the /config rows: only the "model" row matters here; its options are what /model offers
+  on('config.list', () => {
+    if (current.options === 'throw') throw new Error('config unavailable')
+    const theme = { key: 'theme', label: 'Theme', kind: 'choice', value: 'dark', options: ['dark', 'light'], provider: { kind: 'engine' }, isLocked: false }
+    if (current.options === undefined || current.options === 'missing') return { value: [theme] }
+    return { value: [theme, { key: 'model', label: 'Model', kind: 'choice', value: 'default', options: current.options, provider: { kind: 'engine' }, isLocked: false }] }
+  })
+  // the band's place needs a folder before it reads the context; only tests about tokens give one
+  if (opts.tokens !== undefined) on('session.cwd', () => ({ value: '/work/my-repo' }))
+  on('session.usage', () => {
+    if (current.tokens === undefined) throw new Error('no usage yet')
+    return { value: { context: { tokens: current.tokens, window: 200000, percent: Math.round((current.tokens / 200000) * 100) } } }
+  })
   on('prompt.submit', (_: any, e: any) => (opts.drop?.(e.text) ? { drop: 'blocked beneath' } : e))
   on('turn.start', (_: any, e: any) => ({ turnId: e.turnId }))
   on('turn.complete', (_: any, e: any) => ({ text: e.answer }))
@@ -135,7 +152,8 @@ test('the band and the pane draw every state on terminal and desktop', async ($:
     expect(await widget.find({ key: 'power' })).toBeUndefined()
     await widget.unmount()
 
-    await $.prompt.submit({ text: 'hello' })
+    // back to no route for the next surface (0.4.0: a plain "hello" now routes to general)
+    await $.prompt.submit({ text: '#self hello' })
   }
 })
 
@@ -429,7 +447,9 @@ for (const custom of OVERRIDES) {
     const { files, sent } = await writtenWith($, on, { HOME: '/home/test', CLAUDE_MODEL_ROUTER_HOME: custom }, theirs)
     expect(Object.keys(files).filter(f => f.endsWith('setups.json'))).toEqual([OWN])
     await turn($, 'tell me about the zebra', 't1')
-    expect(sent[0]?.model).toBe('claude-fable-5') // the other folder's rules.json was not read
+    // the other folder's rules.json was not read: it would make this chores (Haiku); 0.4.0 sends a
+    // prompt that matches nothing to general (Sonnet) where 0.3 left it on the session model
+    expect(sent[0]?.model).toBe('sonnet')
   })
 }
 
@@ -606,4 +626,203 @@ test('I4: a new submit replaces the pending route', async ($: any, on: any) => {
   await $.turn.start({ text: 'rename foo to bar', turnId: 't1' })
   await step($, 't1')
   expect(sent[0]?.model).toBe('haiku')
+})
+
+// ---- 0.4.0 (1): models the account cannot use fall back ----
+
+const ALL = ['default', 'sonnet', 'opus', 'haiku', 'fable', 'best', 'sonnet[1m]', 'opus[1m]', 'fable[1m]', 'opusplan']
+const NO_FABLE = ALL.filter(o => !o.includes('fable'))
+
+async function optionsOf(pane: any, key: string) {
+  return ((await pane.find({ key }))?.props.options as any[]).map(o => o.value)
+}
+
+test('an account without Fable: plan runs on Opus, and the pane says so in one line', async ($: any, on: any) => {
+  const { sent } = engine(on, { options: NO_FABLE })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await turn($, 'Plan the migration to the new API', 't1')
+  expect(sent[0]).toEqual({ model: 'opus', effort: 'xhigh', agentId: undefined })
+  for (const surface of SURFACES) {
+    const band = await $.ui.mount({ ...BAND, surface })
+    expect(await route(band)).toBe('●●●●○ Opus · X-High')
+    await band.unmount()
+    const pane = await $.ui.mount({ ...PANE, surface })
+    expect(await optionsOf(pane, 'use')).toEqual(['auto', 'opus', 'sonnet', 'haiku'])
+    await pane.press({ key: 'tab-routes' })
+    // the selected Fable stays in its own dropdown so nothing changes silently; others drop it
+    expect(await optionsOf(pane, 'model-plan')).toEqual(['fable', 'opus', 'sonnet', 'haiku'])
+    expect(await optionsOf(pane, 'model-code')).toEqual(['opus', 'sonnet', 'haiku'])
+    expect((await pane.find({ type: 'Text', text: /available/ }))?.text).toBe("Fable isn't available on this account, so Opus is used instead.")
+    await pane.press({ key: 'tab-now' })
+    await pane.unmount()
+  }
+})
+
+test('an account with Fable: Fable plans, every model is offered, no extra line', async ($: any, on: any) => {
+  const { sent } = engine(on, { options: ALL })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await turn($, 'Plan the migration to the new API', 't1')
+  expect(sent[0]).toEqual({ model: 'fable', effort: 'xhigh', agentId: undefined })
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await optionsOf(pane, 'use')).toEqual(['auto', 'fable', 'opus', 'sonnet', 'haiku'])
+  await pane.press({ key: 'tab-routes' })
+  expect(await optionsOf(pane, 'model-code')).toEqual(['fable', 'opus', 'sonnet', 'haiku'])
+  expect(await pane.find({ type: 'Text', text: /available/ })).toBeUndefined()
+  await pane.unmount()
+})
+
+for (const options of ['missing', 'throw', ['default', 'best']] as const) {
+  test(`model row ${Array.isArray(options) ? 'naming no family' : options}: every model counts as available`, async ($: any, on: any) => {
+    const { sent } = engine(on, { options: options as Rows })
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+    await turn($, 'Plan the migration to the new API', 't1')
+    expect(sent[0]?.model).toBe('fable')
+    const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await pane.press({ key: 'tab-routes' })
+    expect(await pane.find({ type: 'Text', text: /available/ })).toBeUndefined()
+    await pane.unmount()
+  })
+}
+
+test('a pin, #plan and @fable on an account without Fable all go to Opus', async ($: any, on: any) => {
+  const { sent } = engine(on, { options: NO_FABLE })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await turn($, '#plan tidy this', 't1')
+  await turn($, '@fable tidy this', 't2')
+  expect((await $.command.run({ command: 'router', args: 'fable' })).text).toMatch(/Opus/)
+  await turn($, 'rename foo to bar', 't3')
+  expect(sent.map(s => s.model)).toEqual(['opus', 'opus', 'opus'])
+  const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await route(band)).toMatch(/^●+○* Opus · \S+ {2}Pinned$/)
+  expect((await band.find({ key: 'pin' }))?.text).toBe('Opus ▾')
+  await band.unmount()
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  // the pinned Fable stays listed so the picker shows what was chosen
+  expect(await optionsOf(pane, 'use')).toEqual(['auto', 'fable', 'opus', 'sonnet', 'haiku'])
+  await pane.unmount()
+})
+
+test('availability is read again when a turn completes', async ($: any, on: any) => {
+  const { sent, current } = engine(on, { options: ALL })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await turn($, 'Plan the migration to the new API', 't1')
+  current.options = NO_FABLE
+  await turn($, 'rename foo to bar', 't2')
+  await turn($, 'Plan the migration to the new API', 't3')
+  expect(sent.map(s => s.model)).toEqual(['fable', 'haiku', 'opus'])
+})
+
+// ---- 0.4.0 (2, 3): general, staying in flow, continuations ----
+
+test('a first prompt that matches nothing runs on general (Sonnet medium), not the session model', async ($: any, on: any) => {
+  const { sent } = engine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await turn($, 'tell me about the zebra', 't1')
+  expect(sent[0]).toEqual({ model: 'sonnet', effort: 'medium', agentId: undefined })
+})
+
+test('the previous route steers continuations and unmatched prompts', async ($: any, on: any) => {
+  const { sent } = engine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await turn($, 'Plan the migration to the new API', 't1')
+  await turn($, 'yes go ahead', 't2') // approval after a plan: implement it
+  await turn($, 'debug the crash in the parser', 't3')
+  await turn($, 'fix this', 't4') // still debugging: stays on Opus
+  await turn($, 'tell me about the zebra', 't5') // in flow after hard
+  await turn($, 'yes, now write the PR description', 't6')
+  expect(sent.map(s => `${s.model}/${s.effort}`)).toEqual(['fable/xhigh', 'sonnet/medium', 'opus/high', 'opus/high', 'opus/high', 'sonnet/medium'])
+})
+
+test('the pane lists General in the Tasks and the Models tab', async ($: any, on: any) => {
+  engine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.prompt.submit({ text: 'tell me about the zebra' })
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await pane.find({ key: 'row-general' })).toBeDefined()
+  await pane.press({ key: 'tab-routes' })
+  expect(await pane.find({ key: 'model-general' })).toBeDefined()
+  expect(await pane.find({ key: 'effort-general' })).toBeDefined()
+  await pane.unmount()
+})
+
+// ---- 0.4.0 (4): in a long conversation an automatic route keeps the warm model ----
+
+test('below sticky_tokens the model switches, with no Holding', async ($: any, on: any) => {
+  const { sent } = engine(on, { tokens: 59999 })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await turn($, 'debug the crash in the parser', 't1')
+  await turn($, 'rename foo to bar', 't2')
+  expect(sent.map(s => s.model)).toEqual(['opus', 'haiku'])
+  const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await route(band)).toBe('●○○○○ Haiku · Low')
+  await band.unmount()
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await pane.find({ type: 'Text', text: /cache warm/ })).toBeUndefined()
+  await pane.unmount()
+})
+
+test('at sticky_tokens an automatic route holds the previous model with the chosen effort', async ($: any, on: any) => {
+  const { sent } = engine(on, { tokens: 120000 })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await turn($, 'debug the crash in the parser', 't1') // the first turn never holds
+  await turn($, 'rename foo to bar', 't2')
+  expect(sent.map(s => `${s.model}/${s.effort}`)).toEqual(['opus/high', 'opus/low'])
+  for (const surface of SURFACES) {
+    const band = await $.ui.mount({ ...BAND, surface })
+    expect(await route(band)).toBe('●○○○○ Opus · Low  Holding')
+    await band.unmount()
+    const pane = await $.ui.mount({ ...PANE, surface })
+    expect((await pane.find({ type: 'Text', text: /cache warm/ }))?.text).toBe('Staying on Opus to keep its cache warm (conversation is 120k tokens).')
+    await pane.unmount()
+  }
+})
+
+test('a pin, a #tag, @model and a plain-language override still switch in a long conversation', async ($: any, on: any) => {
+  const { sent } = engine(on, { tokens: 150000 })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await turn($, 'debug the crash in the parser', 't1')
+  await turn($, '#chores tidy this', 't2')
+  await turn($, '@sonnet tidy this', 't3')
+  await turn($, 'use haiku for this: tidy', 't4')
+  await $.command.run({ command: 'router', args: 'fable' })
+  await turn($, 'rename foo to bar', 't5')
+  expect(sent.map(s => s.model)).toEqual(['opus', 'haiku', 'sonnet', 'haiku', 'fable'])
+})
+
+test('sticky_tokens 0 turns holding off, and the pane keeps it when it saves', async ($: any, on: any) => {
+  const { sent, files } = engine(on, { tokens: 150000, files: { [SETUPS]: JSON.stringify({ active: 'default', sticky_tokens: 0, setups: { default: {} } }) } })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await turn($, 'debug the crash in the parser', 't1')
+  await turn($, 'rename foo to bar', 't2')
+  expect(sent.map(s => s.model)).toEqual(['opus', 'haiku'])
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await pane.press({ key: 'tab-routes' })
+  await pane.select({ key: 'model-code', value: 'opus' })
+  await pane.unmount()
+  expect(JSON.parse(files[SETUPS] ?? '{}').sticky_tokens).toBe(0)
+})
+
+test('a custom sticky_tokens is honoured, and a bad one falls back to 60000', async ($: any, on: any) => {
+  const { sent, current, files } = engine(on, { tokens: 70000, files: { [SETUPS]: JSON.stringify({ active: 'default', sticky_tokens: 100000, setups: { default: {} } }) } })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await turn($, 'debug the crash in the parser', 't1')
+  await turn($, 'rename foo to bar', 't2') // 70k < 100k: switches
+  files[SETUPS] = JSON.stringify({ active: 'default', sticky_tokens: -5, setups: { default: {} } })
+  current.tokens = 70000
+  await turn($, 'debug the crash in the parser', 't3') // 70k >= 60k: holds Haiku
+  expect(sent.map(s => s.model)).toEqual(['opus', 'haiku', 'haiku'])
+})
+
+test('a held route is never applied to a subagent, and the first request decides nothing for it', async ($: any, on: any) => {
+  const { sent } = engine(on, { tokens: 120000 })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await turn($, 'debug the crash in the parser', 't1')
+  await $.prompt.submit({ text: 'rename foo to bar' })
+  await $.turn.start({ text: 'rename foo to bar', turnId: 't2' })
+  await step($, 't2', { agentId: 'a1', model: 'claude-haiku-5', effort: 'low' })
+  await step($, 't2')
+  expect(sent.slice(1)).toEqual([
+    { model: 'claude-haiku-5', effort: 'low', agentId: 'a1' },
+    { model: 'opus', effort: 'low', agentId: undefined },
+  ])
 })

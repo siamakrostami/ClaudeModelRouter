@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { DEFAULT_RULES, DEFAULT_SETUP } from '../src/core/defaults.js';
+import { DEFAULT_RULES, DEFAULT_SETUP, ROLES, ROLE_INFO } from '../src/core/defaults.js';
 import { classify } from '../src/core/classify.js';
 
 const c = p => classify(p, DEFAULT_RULES, DEFAULT_SETUP);
@@ -28,20 +28,20 @@ const realWorld = [
   ['execute the plan we just wrote', 'code'],
   ['is there a bug in this approach?', 'review'],
   ['address the review comments on PR 12', 'code'],
-  ['check the changes I made', null],
+  ['check the changes I made', 'general'],
   ['pick up ticket MOB-412 and start on it', 'code'],
   ['work on the jira ticket CE-123', 'code'],
   ['add email validation to the signup form', 'code'],
   ['update the ticket status field in the Trip model', 'code'],
-  ['send a message to the BLE device', null],
+  ['send a message to the BLE device', 'general'],
   ['find the root cause of this failure', 'hard'],
   ['find where the race is', 'hard'],
-  ['what format should the API response use', null],
+  ['what format should the API response use', 'general'],
   ['format the date string as ISO in TripCell', 'code'],
-  ['docker compose up fails', null],
+  ['docker compose up fails', 'general'],
   ['fix the typo in README', 'code'],
   ['why does the login screen crash', 'hard'],
-  ["what's the plan for today", null],
+  ["what's the plan for today", 'general'],
   ['look up which line of notes.txt contains foo', 'chores'],
   ['run the linter on the trips module', 'chores'],
   ['draft a reply to the Slack thread about the release', 'write'],
@@ -89,12 +89,12 @@ test('@model with no role on it falls back to the default mapping', () => {
 
 test('#self disables routing', () => assert.equal(c('#self plan this'), null));
 
-test('no match → null, including empty and huge prompts', () => {
-  assert.equal(c('hello'), null);
+test('no match → general (0.4.0: was null); empty prompts are not routed; huge prompts stay fast', () => {
+  assert.equal(c('hello').role, 'general');
   assert.equal(c(''), null);
   assert.equal(c(undefined), null);
   const t = performance.now();
-  assert.equal(c('x'.repeat(50000)), null);
+  assert.equal(c('x'.repeat(50000)).role, 'general');
   assert.ok(performance.now() - t < 50);
 });
 
@@ -163,8 +163,8 @@ test('a long prompt that opens with a chores verb is still chores', () => {
   assert.equal(role('rename getUserById to fetchUserById in every file of the api package and its tests'), 'chores');
 });
 
-test('a long prompt whose only match is a chores word stays on the session model', () => {
-  assert.equal(role('i was reading the logs this morning and want to look up what the nightly cron does with the old exports'), null);
+test('a long prompt whose only match is a chores word goes to general (0.4.0: was the session model)', () => {
+  assert.equal(role('i was reading the logs this morning and want to look up what the nightly cron does with the old exports'), 'general');
 });
 
 // ---- M2: user rules are plain words or phrases, never regexes, so rules.json cannot hang prompt.submit ----
@@ -306,4 +306,142 @@ test('L4: why carries no control bytes from the prompt and is capped at 40', () 
 test('L1: why of an end tag leaves out the trailing punctuation', () => {
   assert.equal(c('explain the whole design here #chores.').why, '#chores');
   assert.equal(c('explain the whole design here @haiku!').why, '@haiku');
+});
+
+// ---- 0.4.0: the general role, staying in flow, continuations, heavier plan signals ----
+
+const after = (p, previousRole) => classify(p, DEFAULT_RULES, DEFAULT_SETUP, { previousRole });
+
+test('general is the last role, Sonnet medium by default, with no rules', () => {
+  assert.deepEqual(ROLES, ['plan', 'review', 'hard', 'code', 'write', 'chores', 'general']);
+  assert.deepEqual(DEFAULT_SETUP.general, { model: 'sonnet', effort: 'medium' });
+  assert.equal(Object.hasOwn(DEFAULT_RULES, 'general'), false);
+  assert.ok(ROLE_INFO.general);
+});
+
+test('no keyword match and no history → general', () => {
+  const r = c('tell me about the zebra');
+  assert.equal(r.role, 'general');
+  assert.equal(r.model, 'sonnet');
+  assert.equal(r.effort, 'medium');
+  assert.equal(r.forced, false);
+});
+
+for (const prev of ['hard', 'code', 'write']) {
+  test(`no keyword match after ${prev} stays on ${prev}`, () => {
+    assert.equal(after('tell me about the zebra', prev).role, prev);
+  });
+}
+
+for (const prev of ['plan', 'review', 'chores', 'general', undefined, 'nonsense']) {
+  test(`no keyword match after ${prev} → general`, () => {
+    assert.equal(after('tell me about the zebra', prev).role, 'general');
+  });
+}
+
+test('a keyword match still wins over the previous role', () => {
+  assert.equal(after('rename foo to bar', 'hard').role, 'chores');
+  assert.equal(after('Plan the migration to the new API', 'code').role, 'plan');
+});
+
+test('overrides are unchanged by the previous role', () => {
+  assert.equal(after('#self tell me', 'hard'), null);
+  assert.equal(after('#chores tell me', 'hard').role, 'chores');
+  assert.equal(after('@opus tell me', 'write').role, 'hard');
+  assert.equal(after('use haiku for this', 'hard').role, 'chores');
+});
+
+test('#general forces the general role', () => {
+  const r = c('#general debug the crash');
+  assert.equal(r.role, 'general');
+  assert.equal(r.forced, true);
+});
+
+test('classify keeps working with three arguments', () => {
+  assert.equal(classify('debug the crash', DEFAULT_RULES, DEFAULT_SETUP).role, 'hard');
+});
+
+test('a setup without general (an old setups.json) still routes general to the default', () => {
+  const old = structuredClone(DEFAULT_SETUP);
+  delete old.general;
+  assert.deepEqual(classify('tell me about the zebra', DEFAULT_RULES, old), { role: 'general', model: 'sonnet', effort: 'medium', forced: false, why: '' });
+});
+
+test('a "general" list in rules.json is not scored', () => {
+  assert.equal(classify('zebra', { ...DEFAULT_RULES, general: ['zebra'] }, DEFAULT_SETUP, { previousRole: 'hard' }).role, 'hard');
+});
+
+// continuations: short approvals follow what the session is doing, not their words
+const continuations = ['yes', 'yep', 'Yeah!', 'ok', 'okay.', 'sure', 'go ahead', 'go on', 'do it', 'continue', 'proceed', 'keep going',
+  'sounds good', 'looks good', 'LGTM', 'approved', 'ship it', 'next', 'try again', 'retry', 'again', 'fix this', 'fix it', 'fix that',
+  'and then', 'yes go ahead', 'ok, continue please', 'looks good, thanks', 'yes please', 'go ahead thanks'];
+for (const p of continuations) {
+  test(`continuation "${p}" after plan → code`, () => assert.equal(after(p, 'plan').role, 'code'));
+}
+
+test('"yes go ahead" after plan or review → code', () => {
+  assert.equal(after('yes go ahead', 'plan').role, 'code');
+  assert.equal(after('approved', 'review').role, 'code');
+});
+
+test('"fix this" after hard stays on hard', () => {
+  const r = after('fix this', 'hard');
+  assert.equal(r.role, 'hard');
+  assert.equal(r.model, 'opus');
+  assert.equal(r.forced, false);
+});
+
+test('a continuation keeps the previous role otherwise', () => {
+  for (const prev of ['code', 'write', 'chores', 'general']) assert.equal(after('ok', prev).role, prev);
+});
+
+test('"ok" with no history → general', () => {
+  assert.equal(c('ok').role, 'general');
+  assert.equal(c('fix this').role, 'general');
+});
+
+test('a continuation with a clear different-role signal is not a continuation', () => {
+  assert.equal(after('yes, now write the PR description', 'plan').role, 'write');
+  assert.equal(after('yes, now write the PR description', 'hard').role, 'write');
+  assert.equal(after('ok, rename foo to bar', 'hard').role, 'chores');
+  assert.equal(after('go ahead and debug the crash', 'plan').role, 'hard');
+});
+
+test('more than 8 words is not a continuation', () => {
+  assert.equal(after('ok so the zebra and the giraffe went to the zoo today', 'plan').role, 'general');
+});
+
+test('a continuation word inside a sentence is not a continuation', () => {
+  assert.equal(after('the next zebra', 'plan').role, 'general');
+  assert.equal(after('okapi', 'plan').role, 'general');
+});
+
+// thinking or heavy work goes to plan (Fable)
+const heavy = [
+  'think hard about the sync engine',
+  'think deeply about this',
+  'think carefully about the cache',
+  'think through the offline mode',
+  'ultrathink',
+  'do a deep dive into the sync engine',
+  'deep-dive into the token refresh',
+  'an in-depth look at the cache',
+  'in depth analysis of the sync engine',
+  'redesign the onboarding flow',
+  'design review of the trips module',
+  'look across the whole codebase for the auth flow',
+  'how is this used across the repo',
+  'build the sync layer from scratch',
+  'an end-to-end design for the export feature',
+  'end to end plan for the migration',
+];
+for (const p of heavy) {
+  test(`heavy: "${p}" → plan`, () => assert.equal(role(p), 'plan'));
+}
+
+test('heavy signals stay conservative', () => {
+  assert.notEqual(role('i think the zebra is fine'), 'plan');
+  assert.notEqual(role('scratch that, rename foo to bar'), 'plan');
+  assert.notEqual(role('run the end to end tests'), 'plan');
+  assert.notEqual(role('the design is fine, implement it'), 'plan');
 });

@@ -1,0 +1,34 @@
+{
+  "active": "default",
+  "enabled": true,
+  "sticky_tokens": 60000,
+  "setups": {
+    "default": {
+      "plan": { "model": "fable", "effort": "xhigh" },
+      "review": { "model": "fable", "effort": "high" },
+      "hard": { "model": "opus", "effort": "high" },
+      "code": { "model": "sonnet", "effort": "medium" },
+      "write": { "model": "sonnet", "effort": "medium" },
+      "chores": { "model": "haiku", "effort": "low" },
+      "general": { "model": "sonnet", "effort": "medium" }
+    },
+    "economy": {
+      "plan": { "model": "opus", "effort": "high" },
+      "review": { "model": "opus", "effort": "high" },
+      "hard": { "model": "opus", "effort": "medium" },
+      "code": { "model": "sonnet", "effort": "medium" },
+      "write": { "model": "sonnet", "effort": "low" },
+      "chores": { "model": "haiku", "effort": "low" },
+      "general": { "model": "sonnet", "effort": "low" }
+    },
+    "deep": {
+      "plan": { "model": "fable", "effort": "max" },
+      "review": { "model": "fable", "effort": "xhigh" },
+      "hard": { "model": "fable", "effort": "high" },
+      "code": { "model": "opus", "effort": "high" },
+      "write": { "model": "sonnet", "effort": "medium" },
+      "chores": { "model": "haiku", "effort": "low" },
+      "general": { "model": "opus", "effort": "medium" }
+    }
+  }
+}

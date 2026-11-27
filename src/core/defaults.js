@@ -1,7 +1,20 @@
-// Roles in tie-break order: most capable first.
-export const ROLES = ['plan', 'review', 'hard', 'code', 'write', 'chores'];
+// Roles in tie-break order: most capable first. `general` comes last: it has no keyword rules and
+// takes a prompt that matches nothing ("everything else").
+export const ROLES = ['plan', 'review', 'hard', 'code', 'write', 'chores', 'general'];
+/** The roles keyword rules score, in tie-break order. */
+export const SCORED_ROLES = ROLES.filter(r => r !== 'general');
 export const MODELS = ['fable', 'opus', 'sonnet', 'haiku'];
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+/**
+ * sticky_tokens: from this many tokens of context, an automatic route keeps the model the last
+ * request used (its prompt cache is warm) instead of switching. 0 turns it off.
+ */
+export const DEFAULT_STICKY_TOKENS = 60000;
+
+/** A valid sticky_tokens value (a non-negative integer), else the default. */
+export function stickyOf(value) {
+  return Number.isSafeInteger(value) && value >= 0 ? value : DEFAULT_STICKY_TOKENS;
+}
 
 export const DEFAULT_SETUP = {
   plan: { model: 'fable', effort: 'xhigh' },
@@ -10,6 +23,7 @@ export const DEFAULT_SETUP = {
   code: { model: 'sonnet', effort: 'medium' },
   write: { model: 'sonnet', effort: 'medium' },
   chores: { model: 'haiku', effort: 'low' },
+  general: { model: 'sonnet', effort: 'medium' },
 };
 
 export const ROLE_INFO = {
@@ -19,6 +33,7 @@ export const ROLE_INFO = {
   code: 'Regular code, tests, refactors',
   write: 'Prose people read: PRs, Slack, docs, tickets',
   chores: 'Git ops, renames, formatting, lookups, commit messages',
+  general: 'Everything else',
 };
 
 // Case-insensitive regex sources; each pattern that matches adds 1 to the role's score.
@@ -37,6 +52,16 @@ export const DEFAULT_RULES = {
     "what'?s the best (approach|way) to",
     'strategy for',
     '\\b(whether|if) (we|i) should\\b',
+    // thinking or heavy work
+    '\\bthink (hard|deeply|carefully|through)\\b',
+    '\\bultrathink\\b',
+    '\\bdeep[- ]dive\\b',
+    '\\bin[- ]depth\\b',
+    '\\bredesign',
+    '\\bdesign review\\b',
+    '\\bacross the (whole )?(codebase|repo)\\b',
+    '\\bfrom scratch\\b',
+    '\\bend[- ]to[- ]end (design|plan)\\b',
   ],
   review: [
     '^\\W*(please |can you |could you )?review\\b',

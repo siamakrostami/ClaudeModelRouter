@@ -1,4 +1,4 @@
-import { ROLES, DEFAULT_SETUP, DEFAULT_RULES } from './defaults.js';
+import { ROLES, SCORED_ROLES, DEFAULT_SETUP, DEFAULT_RULES } from './defaults.js';
 import { clean } from './safe.js';
 
 const WHY_MAX = 40;
@@ -21,7 +21,7 @@ const at = body => ({
   end: new RegExp(`(?:^|\\s)${body}${END}${TAIL}`, 'iu'),
 });
 const SELF_TAG = at('#self');
-const TAG = at('#(plan|review|hard|code|write|chores)');
+const TAG = at(`#(${ROLES.join('|')})`);
 const AT = at('@(fable|opus|sonnet|haiku)');
 const TAIL_SCAN = 200; // the end of the prompt is looked at this far back
 // Plain-language overrides count only in the first PLAIN_SCAN characters.
@@ -39,6 +39,18 @@ function edge(o, prompt) {
 // Chores (Haiku, low effort) only take short, clearly mechanical prompts.
 const CHORES_MAX_WORDS = 12;
 const CHORES_START_RE = /^\W*(?:please |can you |could you )?(?:rename|bump|move|format|lint|run (?:the )?(?:linter|formatter|prettier|eslint|swiftlint|swiftformat)|write (?:a |the )?commit message)\b/i;
+
+// A short reply that carries on with what the session is doing ("yes go ahead", "fix this").
+const CONTINUATION_MAX_WORDS = 8;
+const CONTINUE_WORDS = 'yes|yep|yeah|ok|okay|sure|go ahead|go on|do it|continue|proceed|keep going|sounds good|looks good|lgtm|approved|ship it|next|try again|retry|again|fix (?:this|it|that)|and then';
+const COURTESY = 'please|thanks|thank you';
+// One or more continuation phrases (and courtesy words) at the very start, each a whole word.
+const CONTINUE_RE = new RegExp(`^(?:[\\s\\p{P}]*(?:${CONTINUE_WORDS}|${COURTESY})(?![\\w-]))+[\\s\\p{P}]*`, 'iu');
+const CONTINUE_WORD_RE = new RegExp(`(?:^|[^\\w-])(?:${CONTINUE_WORDS})(?![\\w-])`, 'iu');
+// After a plan or a review, an approval means "implement it".
+const AFTER_APPROVAL = new Set(['plan', 'review']);
+// With no keyword match, these roles keep going (staying in flow); any other falls to general.
+const IN_FLOW = new Set(['hard', 'code', 'write']);
 
 /**
  * A rules.json entry that is not a built-in rule is the person's own word or phrase, never a
@@ -64,7 +76,7 @@ function compile(rules) {
   let c = compiled.get(rules);
   if (c) return c;
   c = {};
-  for (const role of ROLES) {
+  for (const role of SCORED_ROLES) {
     c[role] = [];
     let own = 0;
     const list = Object.hasOwn(rules, role) && Array.isArray(rules[role]) ? rules[role] : [];
@@ -93,18 +105,58 @@ function choresAllowed(text) {
   return text.trim().split(/\s+/).length <= CHORES_MAX_WORDS || CHORES_START_RE.test(text);
 }
 
+/** The best keyword-scored route for `text`, or null when no rule matches. */
+function score(text, rules, setup) {
+  const res = compile(rules);
+  const userText = text.slice(0, MAX_USER_SCAN);
+  let best = null;
+  let bestScore = 0;
+  let bestWhy = '';
+  for (const role of SCORED_ROLES) {
+    if (role === 'chores' && (best || !choresAllowed(text))) continue;
+    let score = 0;
+    let why = '';
+    for (const { re, user } of res[role]) {
+      const m = re.exec(user ? userText : text);
+      if (m) { score += 1; if (!why) why = m[0].trim(); }
+    }
+    if (score > bestScore) { best = role; bestScore = score; bestWhy = why; }
+  }
+  return best ? route(best, setup, false, undefined, bestWhy) : null;
+}
+
 /**
- * Decide which role a prompt belongs to.
- * Overrides: #self or "do it yourself" (no routing), #<role>, @<model> or "use <model> for this".
- * Tags count only at the start or end of the prompt; the plain-language forms only in its first
- * 200 characters.
- * Otherwise keyword scoring: any other role's match beats chores, chores needs a short or
- * mechanical prompt, and ties go to ROLES order (most capable first).
- * Returns {role, model, effort, forced, why} or null for "no routing".
+ * A short continuation ("yes go ahead", "fix this", "ok, continue please"): the leading phrases
+ * and what follows them, or null. Only prompts of at most 8 words that open with one.
  */
-export function classify(prompt, rules, setup) {
+function continuation(prompt) {
+  const text = prompt.trim();
+  if (text.split(/\s+/).length > CONTINUATION_MAX_WORDS) return null;
+  const m = CONTINUE_RE.exec(text);
+  if (!m || !CONTINUE_WORD_RE.test(m[0])) return null;
+  return { phrase: m[0].trim().replace(/[\s\p{P}]+$/u, ''), rest: text.slice(m[0].length) };
+}
+
+const known = role => typeof role === 'string' && ROLES.includes(role);
+
+/**
+ * Decide which role a prompt belongs to, in this order:
+ * 1. Overrides: #self or "do it yourself" (no routing), #<role>, @<model> or "use <model> for
+ *    this". Tags count only at the start or end of the prompt; the plain-language forms only in
+ *    its first 200 characters.
+ * 2. A short continuation ("yes go ahead", "fix this"): after plan or review it means code,
+ *    otherwise the previous role again; with no previous role, general. One that goes on to ask
+ *    for something a rule matches ("yes, now write the PR description") is routed by that.
+ * 3. Keyword scoring: any other role's match beats chores, chores needs a short or mechanical
+ *    prompt, and ties go to ROLES order (most capable first).
+ * 4. No match: the previous role when it was hard, code or write (staying in flow), else general.
+ * `context.previousRole` is the role of the session's previous route, if any.
+ * Returns {role, model, effort, forced, why}, or null for "no routing" (#self, an empty prompt).
+ */
+export function classify(prompt, rules, setup, context = {}) {
   if (typeof prompt !== 'string' || !prompt.trim()) return null;
   const text = prompt.slice(0, MAX_SCAN);
+  const previous = known(context?.previousRole) ? context.previousRole : null;
 
   const head = prompt.slice(0, PLAIN_SCAN);
 
@@ -123,20 +175,15 @@ export function classify(prompt, rules, setup) {
     return route(byDefault, setup, true, model, why);
   }
 
-  const res = compile(rules);
-  const userText = text.slice(0, MAX_USER_SCAN);
-  let best = null;
-  let bestScore = 0;
-  let bestWhy = '';
-  for (const role of ROLES) {
-    if (role === 'chores' && (best || !choresAllowed(text))) continue;
-    let score = 0;
-    let why = '';
-    for (const { re, user } of res[role]) {
-      const m = re.exec(user ? userText : text);
-      if (m) { score += 1; if (!why) why = m[0].trim(); }
-    }
-    if (score > bestScore) { best = role; bestScore = score; bestWhy = why; }
+  const cont = continuation(text);
+  if (cont) {
+    const asked = cont.rest ? score(cont.rest, rules, setup) : null;
+    if (asked) return asked;
+    const role = !previous ? 'general' : AFTER_APPROVAL.has(previous) ? 'code' : previous;
+    return route(role, setup, false, undefined, cont.phrase);
   }
-  return best ? route(best, setup, false, undefined, bestWhy) : null;
+
+  const best = score(text, rules, setup);
+  if (best) return best;
+  return route(previous && IN_FLOW.has(previous) ? previous : 'general', setup, false);
 }

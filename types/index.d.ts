@@ -7,6 +7,8 @@ export type Config = {
   enabled: boolean
   setups: Record<string, Setup>
   rules: Record<string, string[]>
+  /** sticky_tokens from setups.json: from this context size an automatic route keeps the previous model; 0 = off. */
+  sticky: number
 }
 
 /** Where a turn is going and why: picked from the prompt (auto) or a pinned model (pin). */
@@ -16,6 +18,13 @@ export type Route = {
   effort: string
   why: string
   source: 'auto' | 'pin'
+  /** From #role, @model or "use <model> for this": never held. */
+  forced?: boolean
+  /** Kept on the previous model (`model`) to keep its prompt cache warm, instead of `wanted`. */
+  held?: boolean
+  wanted?: string
+  /** The context size, in tokens, the hold was decided at. */
+  tokens?: number
 }
 
 /** The route `turn.step` applies, bound to the one turn it was decided for. */
@@ -33,8 +42,8 @@ export type Queued = { hash: string; route: Route }
 /** The model and effort the last main-chat request actually went out with. */
 export type Live = { model: string; effort: string }
 
-/** Where the session is: project folder name, git branch, context window used. */
-export type Place = { project: string; branch: string | null; ctx: number | null }
+/** Where the session is: project folder name, git branch, context window used (percent and tokens). */
+export type Place = { project: string; branch: string | null; ctx: number | null; tokens?: number | null }
 
 declare module 'claude-code' {
   interface PluginState {
@@ -51,6 +60,8 @@ declare module 'claude-code' {
       tab: string
       place: Place | null
       base: string | null
+      /** Model families the account can pick (the /config "model" row); null when unknown. */
+      available: string[] | null
     }
   }
 }

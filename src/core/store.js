@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { ROLES, MODELS, EFFORTS, DEFAULT_SETUP, DEFAULT_RULES } from './defaults.js';
+import { ROLES, MODELS, EFFORTS, DEFAULT_SETUP, DEFAULT_RULES, DEFAULT_STICKY_TOKENS, stickyOf } from './defaults.js';
 import { clean, isSetupName } from './safe.js';
 
 /**
@@ -169,6 +169,36 @@ export function writeDefaultRules() {
   if (fs.existsSync(target)) return { path: target, created: false };
   writeJson('rules.json', DEFAULT_RULES);
   return { path: target, created: true };
+}
+
+/**
+ * Add the setups of a presets file (parsed) whose names are not taken yet. Never overwrites a
+ * setup and never changes the active one. Throws on a file that is not {setups: {...}}.
+ * Returns the names added and the names kept as they were.
+ */
+export function addPresets(presets) {
+  if (!isObj(presets) || !isObj(presets.setups)) throw new Error('the presets file does not hold {"setups": {...}}');
+  const d = loadSetups();
+  const added = [];
+  const kept = [];
+  for (const name of Object.keys(presets.setups)) {
+    if (!isSetupName(name) || !isObj(presets.setups[name])) continue;
+    if (Object.hasOwn(d.setups, name)) { kept.push(name); continue; }
+    d.setups[name] = filled(presets.setups[name]);
+    added.push(name);
+  }
+  if (added.length) saveSetups(d);
+  return { added, kept };
+}
+
+export { DEFAULT_STICKY_TOKENS };
+
+/**
+ * sticky_tokens from setups.json (a non-negative integer, else the default): from this context
+ * size an automatic route keeps the previous model; 0 turns it off. Saves keep the key as is.
+ */
+export function stickyTokens() {
+  return stickyOf(loadSetups().sticky_tokens);
 }
 
 /** Turn routing on or off everywhere. /router off in a session pauses that session only. */

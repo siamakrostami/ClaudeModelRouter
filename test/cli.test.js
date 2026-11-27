@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { freshHome } from './helpers.js';
-import { DEFAULT_RULES } from '../src/core/defaults.js';
+import { DEFAULT_RULES, DEFAULT_SETUP } from '../src/core/defaults.js';
 import * as store from '../src/core/store.js';
 import { main } from '../src/cli.js';
 
@@ -16,12 +16,13 @@ async function run(...argv) {
   return { code, out, err };
 }
 
-test('show prints six aligned rows', async () => {
+test('show prints seven aligned rows, general last (0.4.0: was six)', async () => {
   const { code, out } = await run('show');
   assert.equal(code, 0);
-  const rows = out.split('\n').filter(l => /^(plan|review|hard|code|write|chores)\s/.test(l));
-  assert.equal(rows.length, 6);
+  const rows = out.split('\n').filter(l => /^(plan|review|hard|code|write|chores|general)\s/.test(l));
+  assert.equal(rows.length, 7);
   assert.match(rows[0], /^plan\s+fable\s+xhigh/);
+  assert.match(rows[6], /^general\s+sonnet\s+medium\s+Everything else/);
 });
 
 test('show says nothing about subagent model variables', async () => {
@@ -156,4 +157,103 @@ test('L6: no picker module: show is printed with a one-line note', async () => {
   assert.match(out, /^plan\s+fable/m);
   assert.equal(err.trim().split('\n').length, 1);
   assert.match(err, /picker/i);
+});
+
+// ---- 0.4.0: general role, presets, sticky_tokens ----
+
+test('set accepts the general role', async () => {
+  assert.equal((await run('set', 'general', 'haiku', 'low')).code, 0);
+  assert.deepEqual(store.activeSetup().general, { model: 'haiku', effort: 'low' });
+});
+
+test('an old setups.json without general gets the default general', async () => {
+  fs.writeFileSync(path.join(home, 'setups.json'), JSON.stringify({ active: 'default', setups: { default: { code: { model: 'opus', effort: 'high' } } } }));
+  assert.match((await run('show')).out, /^general\s+sonnet\s+medium/m);
+});
+
+const PRESETS = JSON.parse(fs.readFileSync(new URL('../presets/setups.json', import.meta.url), 'utf8'));
+
+test('presets/setups.json holds default, economy and deep, complete and valid', () => {
+  assert.equal(PRESETS.active, 'default');
+  assert.deepEqual(Object.keys(PRESETS.setups), ['default', 'economy', 'deep']);
+  for (const [name, setup] of Object.entries(PRESETS.setups)) {
+    assert.deepEqual(Object.keys(setup), ['plan', 'review', 'hard', 'code', 'write', 'chores', 'general'], name);
+    for (const s of Object.values(setup)) {
+      assert.deepEqual(Object.keys(s), ['model', 'effort'], name);
+      assert.ok(['fable', 'opus', 'sonnet', 'haiku'].includes(s.model), name);
+      assert.ok(['low', 'medium', 'high', 'xhigh', 'max'].includes(s.effort), name);
+    }
+  }
+  assert.deepEqual(PRESETS.setups.default, DEFAULT_SETUP);
+  assert.ok(Object.values(PRESETS.setups.economy).every(s => s.model !== 'fable'));
+  assert.deepEqual(PRESETS.setups.deep.plan, { model: 'fable', effort: 'max' });
+  assert.deepEqual(PRESETS.setups.economy.general, { model: 'sonnet', effort: 'low' });
+  assert.deepEqual(PRESETS.setups.deep.general, { model: 'opus', effort: 'medium' });
+});
+
+test('presets adds the shipped setups, keeps the active one, and says how to switch', async () => {
+  await run('save', 'mine');
+  const r = await run('presets');
+  assert.equal(r.code, 0);
+  const d = store.loadSetups();
+  assert.deepEqual(Object.keys(d.setups).sort(), ['deep', 'default', 'economy', 'mine']);
+  assert.equal(d.active, 'mine');
+  assert.deepEqual(d.setups.economy, PRESETS.setups.economy);
+  assert.match(r.out, /economy/);
+  assert.match(r.out, /deep/);
+  assert.match(r.out, /claude-model-router use economy/);
+  assert.match(r.out, /Models tab/);
+});
+
+test('presets never overwrites a setup of the same name', async () => {
+  store.setRole('code', 'haiku', 'low');
+  const r = await run('presets');
+  assert.equal(r.code, 0);
+  assert.deepEqual(store.loadSetups().setups.default.code, { model: 'haiku', effort: 'low' });
+  assert.match(r.out, /default.*(kept|already)/i);
+  const again = await run('presets');
+  assert.equal(again.code, 0);
+  assert.match(again.out, /nothing (new )?to add|already/i);
+});
+
+test('presets refuses a file of an unknown shape and changes nothing', async () => {
+  const dir = fs.mkdtempSync(path.join(home, 'p-'));
+  for (const body of ['[1,2]', '{"setups":[]}', '{"nope":1}', '{bad']) {
+    const f = path.join(dir, 'setups.json');
+    fs.writeFileSync(f, body);
+    let out = '', err = '';
+    const code = await main(['presets'], { stdout: { write: s => { out += s; } }, stderr: { write: s => { err += s; } }, isTTY: false, presetsFile: f });
+    assert.equal(code, 2, body);
+    assert.match(err, /preset/i, body);
+  }
+  assert.deepEqual(store.listSetups().names, ['default']);
+});
+
+test('presets skips badly named or prototype setups in the file', () => {
+  const r = store.addPresets(JSON.parse('{"setups":{"__proto__":{},"bad name":{},"ok":{"code":{"model":"opus","effort":"high"}}}}'));
+  assert.deepEqual(r.added, ['ok']);
+  assert.deepEqual(store.loadSetups().setups.ok.code, { model: 'opus', effort: 'high' });
+  assert.equal({}.code, undefined);
+});
+
+test('usage lists presets and says subagents are left alone', async () => {
+  const { out } = await run('help');
+  assert.match(out, /presets/);
+  assert.match(out, /subagent/i);
+});
+
+test('sticky_tokens defaults to 60000, is kept on save, and an invalid value falls back', async () => {
+  assert.equal(store.stickyTokens(), 60000);
+  fs.writeFileSync(path.join(home, 'setups.json'), JSON.stringify({ active: 'default', sticky_tokens: 0, setups: { default: {} } }));
+  assert.equal(store.stickyTokens(), 0);
+  await run('set', 'code', 'opus');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(home, 'setups.json'), 'utf8')).sticky_tokens, 0);
+  await run('presets');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(home, 'setups.json'), 'utf8')).sticky_tokens, 0);
+  for (const bad of [-1, 1.5, '9000', null, true]) {
+    fs.writeFileSync(path.join(home, 'setups.json'), JSON.stringify({ active: 'default', sticky_tokens: bad, setups: { default: {} } }));
+    assert.equal(store.stickyTokens(), 60000, String(bad));
+  }
+  fs.writeFileSync(path.join(home, 'setups.json'), JSON.stringify({ active: 'default', sticky_tokens: 120000, setups: { default: {} } }));
+  assert.equal(store.stickyTokens(), 120000);
 });
