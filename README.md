@@ -139,13 +139,22 @@ session swaps a model it cannot use when it sends the request.
 
 ## Presets
 
-`presets/setups.json` ships three setups:
+`presets/setups.json` ships four setups:
 
 | Setup | What it is for |
 |---|---|
 | default | the defaults above: Fable plans and reviews, Opus does hard work, Sonnet the rest, Haiku chores |
 | economy | no Fable at all: Opus plans, reviews and does hard work, Sonnet codes and writes (low effort for writing and general) |
 | deep | more thinking: Fable for plan, review and hard, Opus for code and general |
+| advisor | Opus for everything but chores (Haiku), so the conversation almost never changes model and pays no cache switch. Pair it with Fable as Claude Code's advisor (below) |
+
+**Fable as an advisor.** Claude Code can give the main model an advisor: a stronger model it
+consults mid-task, while the conversation stays where it is. Turn it on with `/advisor fable` in a
+session, or `"advisorModel": "fable"` in `~/.claude/settings.json`. The router can't set it for
+you. The advisor must be at least as capable as the main model, so Fable can advise Opus or
+Sonnet. With the `advisor` setup, Opus does the work and asks Fable when it needs to, instead of
+the whole conversation moving to Fable. Check what `/advisor` says about billing: some advisor
+models bill to usage credits.
 
 `claude-model-router presets` adds every preset whose name you do not have yet. It never changes
 a setup you have or which one is active. Switch with `claude-model-router use economy`, or pick

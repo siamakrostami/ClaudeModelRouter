@@ -29,6 +29,15 @@
       "write": { "model": "sonnet", "effort": "medium" },
       "chores": { "model": "haiku", "effort": "low" },
       "general": { "model": "opus", "effort": "medium" }
+    },
+    "advisor": {
+      "plan": { "model": "opus", "effort": "high" },
+      "review": { "model": "opus", "effort": "high" },
+      "hard": { "model": "opus", "effort": "high" },
+      "code": { "model": "opus", "effort": "medium" },
+      "write": { "model": "opus", "effort": "medium" },
+      "chores": { "model": "haiku", "effort": "low" },
+      "general": { "model": "opus", "effort": "medium" }
     }
   }
 }

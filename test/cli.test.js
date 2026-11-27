@@ -173,9 +173,9 @@ test('an old setups.json without general gets the default general', async () => 
 
 const PRESETS = JSON.parse(fs.readFileSync(new URL('../presets/setups.json', import.meta.url), 'utf8'));
 
-test('presets/setups.json holds default, economy and deep, complete and valid', () => {
+test('presets/setups.json holds default, economy, deep and advisor, complete and valid', () => {
   assert.equal(PRESETS.active, 'default');
-  assert.deepEqual(Object.keys(PRESETS.setups), ['default', 'economy', 'deep']);
+  assert.deepEqual(Object.keys(PRESETS.setups), ['default', 'economy', 'deep', 'advisor']);
   for (const [name, setup] of Object.entries(PRESETS.setups)) {
     assert.deepEqual(Object.keys(setup), ['plan', 'review', 'hard', 'code', 'write', 'chores', 'general'], name);
     for (const s of Object.values(setup)) {
@@ -189,6 +189,8 @@ test('presets/setups.json holds default, economy and deep, complete and valid', 
   assert.deepEqual(PRESETS.setups.deep.plan, { model: 'fable', effort: 'max' });
   assert.deepEqual(PRESETS.setups.economy.general, { model: 'sonnet', effort: 'low' });
   assert.deepEqual(PRESETS.setups.deep.general, { model: 'opus', effort: 'medium' });
+  // advisor: Opus everywhere but chores, so the conversation rarely changes model; Fable advises
+  assert.ok(Object.entries(PRESETS.setups.advisor).every(([r, s]) => (r === 'chores' ? s.model === 'haiku' : s.model === 'opus')));
 });
 
 test('presets adds the shipped setups, keeps the active one, and says how to switch', async () => {
@@ -196,7 +198,7 @@ test('presets adds the shipped setups, keeps the active one, and says how to swi
   const r = await run('presets');
   assert.equal(r.code, 0);
   const d = store.loadSetups();
-  assert.deepEqual(Object.keys(d.setups).sort(), ['deep', 'default', 'economy', 'mine']);
+  assert.deepEqual(Object.keys(d.setups).sort(), ['advisor', 'deep', 'default', 'economy', 'mine']);
   assert.equal(d.active, 'mine');
   assert.deepEqual(d.setups.economy, PRESETS.setups.economy);
   assert.match(r.out, /economy/);
