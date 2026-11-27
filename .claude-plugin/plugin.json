@@ -1,7 +1,7 @@
 {
   "name": "model-router",
   "description": "Per-turn model routing for Claude Code: each prompt runs on the right model and effort (Fable plans and reviews, Opus does hard code and UI, Sonnet does regular code and writing, Haiku does chores), with a band above the prompt and a /router pane.",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "author": {
     "name": "Siamak Rostami"
   },

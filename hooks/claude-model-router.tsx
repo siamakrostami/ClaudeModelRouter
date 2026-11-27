@@ -4,7 +4,7 @@ import type { PromptSubmitInput, Register } from 'claude-code'
 import { classify } from '../src/core/classify.js'
 import { availableFrom, resolveModel } from '../src/core/models.js'
 import { clean, fingerprint } from '../src/core/safe.js'
-import type { Config, Live, Place, Route, Setup } from '../types'
+import type { Config, Live, ModelTally, Place, Route, Setup, Tally } from '../types'
 import {
   EFFORT_LIST,
   MODEL_COLOR,
@@ -41,6 +41,8 @@ const tab = atom({ plugin: 'model-router', key: 'tab' } as const, 'now')
 /** Model families the account can pick, from the /config "model" row; null = unknown (all usable). */
 const available = atom({ plugin: 'model-router', key: 'available' } as const, null)
 /** A switch Claude asked for with its switch_model tool: the model the rest of this turn runs on. */
+/** Requests and tokens per model family this session, from every response (subagents included). */
+const tally = atom({ plugin: 'model-router', key: 'tally' } as const, null, { shape: 'tally-1' })
 const switched = atom({ plugin: 'model-router', key: 'switched' } as const, null, { shape: 'switched-1' })
 
 /** The active setup; an own key only, so a name like toString never reaches Object.prototype. */
@@ -198,7 +200,7 @@ export function modelNote(model: string, started?: string | null): string | null
   const name = MODEL_NAME[model]
   if (!name) return null
   const was = started && MODEL_NAME[started] && started !== model ? ` The system prompt says ${MODEL_NAME[started]}: that is the session's model, and it is out of date for this turn.` : ''
-  return `Model router: you are Claude ${name} for this turn.${was} If asked which model you are, answer Claude ${name}.`
+  return `Model router: you are Claude ${name} for this turn.${was} If asked which model you are, answer Claude ${name}. If the work turns into a different kind of task (a fix, a review, a design), call switch_model with that task.`
 }
 
 /** The tool Claude calls to change model mid-turn, as registered and as the engine names it. */
@@ -207,14 +209,15 @@ const SWITCH_FULL = `mcp__model-router__${SWITCH_TOOL}`
 const SWITCH_SPEC = {
   name: SWITCH_TOOL,
   description:
-    "Switch the Claude model that answers the rest of this turn. The model router already picked a model from the person's prompt; call this only when the work turns out clearly different from what that pick suits. Switch up to fable for deep planning, architecture or a careful code review, or to opus for hard debugging and tricky UI. Switch down to sonnet or haiku when what is left is routine. Don't call it for small tasks or more than once a turn. The switch lasts until this turn ends, and the next prompt is routed again. A switch makes the new model read the whole conversation again, so it costs time and tokens.",
+    "Switch the model that answers the rest of this turn. The model router picked one from the person's prompt; call this when the work turns out to be a different kind of task. Name the task and the person's setup picks the model: 'code' or 'hard' when you find something that needs fixing (hard for debugging, crashes and UI), 'review' for a careful review, 'plan' for design and architecture, 'write' for prose, 'chores' for routine steps. Name a model only when the person asked for one. Don't switch for small things or more than once a turn. The switch lasts until this turn ends; the next prompt is routed again. The new model reads the whole conversation again, which costs time and tokens.",
   inputSchema: {
     type: 'object',
     properties: {
-      model: { type: 'string', enum: ['fable', 'opus', 'sonnet', 'haiku'], description: 'The model to switch to.' },
+      task: { type: 'string', enum: ['plan', 'review', 'hard', 'code', 'write', 'chores', 'general'], description: "The kind of work ahead; the person's setup maps it to a model." },
+      model: { type: 'string', enum: ['fable', 'opus', 'sonnet', 'haiku'], description: 'A model by name, instead of a task.' },
       reason: { type: 'string', description: 'A few words on why, shown to the person.' },
     },
-    required: ['model', 'reason'],
+    required: ['reason'],
   },
   isDeferred: false,
 }
@@ -233,17 +236,66 @@ async function switchModel($: any, e: any): Promise<string> {
   if (await read($, manual)) return 'The person picked the model by hand with /model, so it was not switched.'
   const pinned = await read($, pin)
   if (pinned) return `The person pinned ${MODEL_NAME[pinned] ?? pinned} with /router, so it was not switched.`
-  const asked = String(e.model ?? '').toLowerCase()
-  if (!MODEL_LIST.includes(asked)) return 'Unknown model. Use fable, opus, sonnet or haiku.'
+  const setup = activeOf(cfg)
+  const task = String(e.task ?? '').toLowerCase()
+  const slot = ROLE_LIST.includes(task) ? slotIn(setup, task) : null
+  const asked = slot ? slot.model : String(e.model ?? '').toLowerCase()
+  if (!MODEL_LIST.includes(asked)) return 'Name a task (plan, review, hard, code, write, chores, general) or a model (fable, opus, sonnet, haiku).'
   const model = resolveModel(asked, await read($, available))
-  const effort = effortFor(activeOf(cfg), model)
+  const effort = slot ? slot.effort : effortFor(setup, model)
   const why = clean(String(e.reason ?? ''), 40)
   await update($, switched, () => ({ model, effort }))
-  await update($, last, (l: Route | null) => ({ role: l?.role ?? 'general', model, effort, why, source: 'auto' as const, switched: true }))
+  await update($, last, (l: Route | null) => ({ role: slot ? task : l?.role ?? 'general', model, effort, why, source: 'auto' as const, switched: true }))
   const name = MODEL_NAME[model] ?? model
   const fallback = model !== asked ? ` (${MODEL_NAME[asked]} is not available on this account)` : ''
   return `Switched to Claude ${name}${fallback}. From your next request in this turn you are Claude ${name}. The switch ends with this turn.`
 }
+
+/** Add one response's usage to the per-model tally. */
+async function count($: any, out: any) {
+  const u = out?.usage
+  const fam = family(u?.model)
+  if (!fam) return
+  const n = (k: string) => (typeof u[k] === 'number' && u[k] > 0 ? u[k] : 0)
+  await update($, tally, (t: Tally | null) => {
+    const was = t?.[fam] ?? { requests: 0, input: 0, cacheRead: 0, cacheWrite: 0, output: 0 }
+    return {
+      ...(t ?? {}),
+      [fam]: {
+        requests: was.requests + 1,
+        input: was.input + n('input_tokens'),
+        cacheRead: was.cacheRead + n('cache_read_input_tokens'),
+        cacheWrite: was.cacheWrite + n('cache_creation_input_tokens'),
+        output: was.output + n('output_tokens'),
+      },
+    }
+  })
+}
+
+/** 1234 → 1.2k, 1234567 → 1.2M. */
+export function short(n: number) {
+  if (n >= 1e6) return `${(n / 1e6).toFixed(n >= 1e7 ? 0 : 1)}M`
+  if (n >= 1e3) return `${(n / 1e3).toFixed(n >= 1e4 ? 0 : 1)}k`
+  return String(Math.round(n))
+}
+
+/** A bar `width` cells wide, `fraction` (0..1) of it filled. */
+function bar(fraction: number, width: number) {
+  const filled = Math.max(0, Math.min(width, Math.round(fraction * width)))
+  return { on: '▰'.repeat(filled), off: '▱'.repeat(width - filled) }
+}
+
+/** "in 2h 5m" until an ISO time; '' when unknown or past. */
+function resetsIn(iso: string | undefined) {
+  const at = iso ? Date.parse(iso) : NaN
+  const ms = at - Date.now()
+  if (!(ms > 0)) return ''
+  const h = Math.floor(ms / 3.6e6)
+  const m = Math.floor((ms % 3.6e6) / 6e4)
+  return h >= 24 ? `resets in ${Math.floor(h / 24)}d ${h % 24}h` : h ? `resets in ${h}h ${m}m` : `resets in ${m}m`
+}
+
+const LIMIT_NAME: Record<string, string> = { five_hour: '5-hour', seven_day: 'Weekly', spend_limit: 'Spend' }
 
 /**
  * What the band and the pane both show: the route of the person's latest turn, or the pin,
@@ -418,6 +470,7 @@ export const register: Register = on => {
     await update($, base, () => startModel || null)
     await update($, manual, () => null)
     await update($, switched, () => null)
+    await update($, tally, () => null)
     await $.tool.register(SWITCH_SPEC).catch(() => {})
     return next(e)
   })
@@ -504,12 +557,17 @@ export const register: Register = on => {
   })
 
   on('turn.step', async function* ($, e, next) {
-    if (e.agentId !== undefined) return yield* next(e)
+    if (e.agentId !== undefined) {
+      const sub = yield* next(e)
+      await count($, sub).catch(() => {})
+      return sub
+    }
     const sw = await read($, switched)
     if (sw && !(await read($, paused))) {
       await update($, live, () => ({ model: sw.model, effort: sw.effort }))
       const out = yield* next({ ...e, model: sw.model, effort: sw.effort as any })
       await recordAnswered($, out, sw)
+      await count($, out).catch(() => {})
       return out
     }
     const r = await read($, route)
@@ -518,6 +576,7 @@ export const register: Register = on => {
       await update($, live, () => sent)
       const out = yield* next(e)
       await recordAnswered($, out, sent)
+      await count($, out).catch(() => {})
       return out
     }
     // The account's models may have changed since the route was decided: resolve again.
@@ -526,6 +585,7 @@ export const register: Register = on => {
     const out = yield* next({ ...e, model, effort: r.effort as any })
     // The band must show the model that answered, not the one asked for: if they differ, the answer wins.
     const answered = await recordAnswered($, out, { model, effort: r.effort })
+    await count($, out).catch(() => {})
     if (answered && answered !== family(model)) await update($, last, (l: Route | null) => (l ? { ...l, model: answered, held: false } : l))
     return out
   })
@@ -579,7 +639,8 @@ export const register: Register = on => {
     const { Box, Text, Button, Select } = $.ui.resolve(e)
     const cfg = await read($, config)
     if (!cfg) return <Text dimColor>Loading…</Text>
-    const current = (await read($, tab)) === 'routes' ? 'routes' : 'now'
+    const t = await read($, tab)
+    const current = t === 'routes' || t === 'usage' ? t : 'now'
     const seen = await view($, cfg)
     const s = status(seen)
     const pinned = seen.pin
@@ -611,6 +672,7 @@ export const register: Register = on => {
         <Box gap={1}>
           <Button key="tab-now" label="Overview" variant={current === 'now' ? 'primary' : 'secondary'} onPress={() => update($, tab, () => 'now')} />
           <Button key="tab-routes" label="Models" variant={current === 'routes' ? 'primary' : 'secondary'} onPress={() => update($, tab, () => 'routes')} />
+          <Button key="tab-usage" label="Usage" variant={current === 'usage' ? 'primary' : 'secondary'} onPress={() => update($, tab, () => 'usage')} />
         </Box>
         <Box gap={1} alignItems="center">
           <Text dimColor size="footnote">Routing</Text>
@@ -618,6 +680,95 @@ export const register: Register = on => {
         </Box>
       </Box>
     )
+
+    if (current === 'usage') {
+      const counts = (await read($, tally)) ?? {}
+      const usage = await $.session.usage().catch(() => null)
+      const rows = MODEL_LIST.filter(f => counts[f]?.requests)
+        .map(f => {
+          const c = counts[f] as ModelTally
+          return { f, c, total: c.input + c.cacheRead + c.cacheWrite + c.output }
+        })
+        .sort((a, b) => b.total - a.total)
+      const sum = rows.reduce((n, r) => n + r.total, 0)
+      const width = narrow ? 10 : 16
+      const win = usage?.context?.window
+      const used = usage?.context?.tokens ?? pl?.tokens ?? null
+      const pct = usage?.context?.percent ?? pl?.ctx ?? null
+      const limits = (usage?.rateLimits ?? []).filter((l: any) => typeof l?.percentUsed === 'number')
+      const usd = usage?.cost?.usd
+      return (
+        <Box flexDirection="column">
+          {header}
+          {section('Models this session')}
+          <Box flexDirection="column" borderStyle="round" borderDimColor paddingX={1}>
+            {rows.length ? (
+              rows.map(({ f, c, total }) => {
+                const b = bar(sum ? total / sum : 0, width)
+                return (
+                  <Box key={`use-${f}`} flexDirection="column">
+                    <Box gap={1}>
+                      <Box width={7} flexShrink={0}>
+                        <Text color={MODEL_COLOR[f]} bold>{MODEL_NAME[f]}</Text>
+                      </Box>
+                      <Text>
+                        <Text color={MODEL_COLOR[f]}>{b.on}</Text>
+                        <Text dimColor>{b.off}</Text>
+                      </Text>
+                      <Text>{`${sum ? Math.round((total / sum) * 100) : 0}%`}</Text>
+                      <Text dimColor wrap="truncate-end">{`${short(total)} tokens · ${c.requests} req`}</Text>
+                    </Box>
+                    <Box paddingLeft={8}>
+                      <Text dimColor size="footnote" wrap="truncate-end">{`in ${short(c.input)} · cached ${short(c.cacheRead)} · written ${short(c.cacheWrite)} · out ${short(c.output)}`}</Text>
+                    </Box>
+                  </Box>
+                )
+              })
+            ) : (
+              <Text dimColor>No requests yet in this session.</Text>
+            )}
+            {typeof usd === 'number' ? <Text dimColor size="footnote">{`About $${usd.toFixed(2)} so far (an estimate, not your bill)`}</Text> : null}
+          </Box>
+          {pct != null ? (
+            <Box flexDirection="column">
+              {section('Context')}
+              <Box borderStyle="round" borderDimColor paddingX={1} gap={1} alignItems="center">
+                <Text color={ring(pct).color}>{ring(pct).glyph}</Text>
+                <Text>
+                  <Text color={gauge(pct, width).color}>{gauge(pct, width).on}</Text>
+                  <Text dimColor>{gauge(pct, width).off}</Text>
+                </Text>
+                <Text weight="semibold">{`${pct}%`}</Text>
+                {used != null && win ? <Text dimColor wrap="truncate-end">{`${short(used)} of ${short(win)}`}</Text> : null}
+              </Box>
+            </Box>
+          ) : null}
+          {limits.length ? (
+            <Box flexDirection="column">
+              {section('Plan limits')}
+              <Box flexDirection="column" borderStyle="round" borderDimColor paddingX={1}>
+                {limits.map((l: any) => {
+                  const g = gauge(l.percentUsed, width)
+                  return (
+                    <Box key={`limit-${l.kind}`} gap={1}>
+                      <Box width={7} flexShrink={0}>
+                        <Text>{LIMIT_NAME[l.kind] ?? cap(String(l.kind))}</Text>
+                      </Box>
+                      <Text>
+                        <Text color={g.color}>{g.on}</Text>
+                        <Text dimColor>{g.off}</Text>
+                      </Text>
+                      <Text>{`${Math.round(l.percentUsed)}%`}</Text>
+                      <Text dimColor wrap="truncate-end">{resetsIn(l.resetsAt)}</Text>
+                    </Box>
+                  )
+                })}
+              </Box>
+            </Box>
+          ) : null}
+        </Box>
+      )
+    }
 
     if (current === 'routes') {
       // One dim line when this setup names a model the account cannot use; nothing otherwise.

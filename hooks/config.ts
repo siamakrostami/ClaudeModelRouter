@@ -86,7 +86,11 @@ export async function loadConfig($: any): Promise<Config> {
   const rules: Record<string, string[]> = {}
   for (const r of SCORED_ROLES) {
     const v = Object.hasOwn(rulesRaw, r) ? rulesRaw[r] : undefined
-    rules[r] = Array.isArray(v) && v.every((x: unknown) => typeof x === 'string') ? v : (DEFAULT_RULES as any)[r]
+    // A rules.json adds to the built-in rules; it never replaces them, so a file written by an older
+    // version does not hide rules added since.
+    const base: string[] = (DEFAULT_RULES as any)[r]
+    const own = Array.isArray(v) && v.every((x: unknown) => typeof x === 'string') ? (v as string[]) : []
+    rules[r] = [...base, ...own.filter(x => !base.includes(x))]
   }
   return {
     active,

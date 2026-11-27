@@ -44,6 +44,10 @@ export type Queued = { hash: string; route: Route }
 /** The model and effort the last main-chat request actually went out with. */
 export type Live = { model: string; effort: string }
 
+/** Requests and tokens one model family used this session. */
+export type ModelTally = { requests: number; input: number; cacheRead: number; cacheWrite: number; output: number }
+export type Tally = Record<string, ModelTally>
+
 /** Where the session is: project folder name, git branch, context window used (percent and tokens). */
 export type Place = { project: string; branch: string | null; ctx: number | null; tokens?: number | null }
 
@@ -66,6 +70,8 @@ declare module 'claude-code' {
       available: string[] | null
       /** A model Claude switched to with switch_model; cleared when the turn ends. */
       switched: Shaped<Live | null>
+      /** Per-model requests and tokens this session. */
+      tally: Shaped<Tally | null>
     }
   }
 }

@@ -24,7 +24,7 @@ const SETUPS = `${DIR}/setups.json`
 type Rows = 'throw' | 'missing' | readonly string[]
 function engine(
   on: any,
-  opts: { model?: string; files?: Record<string, string>; env?: Record<string, string>; drop?: (text: string) => boolean; options?: Rows; tokens?: number; answered?: string } = {},
+  opts: { model?: string; files?: Record<string, string>; env?: Record<string, string>; drop?: (text: string) => boolean; options?: Rows; tokens?: number; answered?: string; usage?: Record<string, number> } = {},
 ) {
   const current: { model: string; options?: Rows; tokens?: number } = { model: opts.model ?? 'claude-fable-5', options: opts.options, tokens: opts.tokens }
   const files: Record<string, string> = { ...(opts.files ?? {}) }
@@ -62,7 +62,7 @@ function engine(
   on('turn.complete', (_: any, e: any) => ({ text: e.answer }))
   on('turn.step', async function* (_: any, e: any) {
     sent.push({ model: e.model, effort: e.effort, agentId: e.agentId })
-    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: opts.answered ? { model: opts.answered } : null }
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: opts.answered ? { model: opts.answered, ...(opts.usage ?? {}) } : null }
   })
   return { current, files, sent, notes }
 }
@@ -885,7 +885,7 @@ test('a switch is refused in a subagent, when paused, when pinned, and for an un
     return String(r.result ?? r.text)
   }
   expect(await call({ model: 'fable', agentId: 'a1' })).toContain('Only the main conversation')
-  expect(await call({ model: 'gpt' })).toContain('Unknown model')
+  expect(await call({ model: 'gpt' })).toContain('Name a task')
   await $.command.run({ command: 'router', args: 'opus' })
   expect(await call({ model: 'fable' })).toContain('pinned Opus')
   await $.command.run({ command: 'router', args: 'auto' })
@@ -905,4 +905,51 @@ test('a switch to a model the account lacks falls back and says so', async ($: a
   expect(String(r.result ?? r.text)).toContain('Claude Opus (Fable is not available')
   await step($, 't1')
   expect(sent[0]?.model).toBe('opus')
+})
+
+test('a switch by task takes the model and effort from the setup', async ($: any, on: any) => {
+  const { sent } = engine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.prompt.submit({ text: 'what is the plan for today' }) // general: Sonnet
+  await $.turn.start({ text: 'what is the plan for today', turnId: 't1' })
+  const r = await $.tool.call({ tool: SWITCH, task: 'hard', reason: 'found a crash to fix' })
+  expect(String(r.result ?? r.text)).toContain('Switched to Claude Opus')
+  await step($, 't1')
+  expect(sent[0]).toEqual({ model: 'opus', effort: 'high', agentId: undefined })
+})
+
+test('the Usage tab shows each model with a bar, its tokens and requests', async ($: any, on: any) => {
+  engine(on, { answered: 'claude-haiku-5-5', usage: { input_tokens: 1000, output_tokens: 200, cache_read_input_tokens: 3000, cache_creation_input_tokens: 0 } })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.prompt.submit({ text: 'rename foo to bar' })
+  await $.turn.start({ text: 'rename foo to bar', turnId: 't1' })
+  await step($, 't1')
+  await step($, 't1')
+  await $.turn.complete({ turnId: 't1', reason: 'answer', answer: '', durationMs: 1, isAborted: false })
+  for (const surface of SURFACES) {
+    const pane = await $.ui.mount({ ...PANE, surface })
+    await pane.press({ key: 'tab-usage' })
+    for (const text of ['Haiku', '100%', '8.4k tokens · 2 req', 'in 2.0k · cached 6.0k · written 0 · out 400']) {
+      expect([surface, text, !!(await pane.find({ type: 'Text', text }))]).toEqual([surface, text, true])
+    }
+    expect(await pane.find({ type: 'Text', text: /^▰{10,16}$/ })).toBeDefined()
+    await pane.unmount()
+  }
+})
+
+test('the Usage tab says so before any request', async ($: any, on: any) => {
+  engine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await pane.press({ key: 'tab-usage' })
+  expect(await pane.find({ type: 'Text', text: 'No requests yet in this session.' })).toBeDefined()
+  await pane.unmount()
+})
+
+test('an old rules.json adds to the built-in rules and hides none of them', async ($: any, on: any) => {
+  const { sent } = engine(on, { files: { [`${DIR}/rules.json`]: JSON.stringify({ hard: ['\\bdebug'], write: ['changelog entry'] }) } })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await turn($, 'check the artifacts and design', 't1') // a built-in hard rule, not in the file
+  await turn($, 'a changelog entry for this', 't2') // the user's own phrase
+  expect(sent.map(x => x.model)).toEqual(['opus', 'sonnet'])
 })

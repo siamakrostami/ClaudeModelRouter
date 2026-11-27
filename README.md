@@ -60,16 +60,22 @@ Claude Model Router is a Claude Code mod:
   **Holding**, and the pane says why. A pin, `#role`, `@model` or "use <model> for this" always
   switches. Set `sticky_tokens` to `0` to route every prompt on its own words.
 - **Claude can switch too.** The router gives Claude a `switch_model` tool. When a task turns out
-  heavier or lighter than the prompt suggested, Claude can move the rest of that turn to another
-  model, and the band says **Switched**. The next prompt is routed again. It never switches in a
+  to be a different kind of work than the prompt suggested (say a chat that finds a bug to fix),
+  Claude names the task, and your setup picks the model for the rest of that turn. The band says
+  **Switched**. The next prompt is routed again. It never switches in a
   subagent, while the router is off, or over a pin or a `/model` choice.
 - **Claude knows which model it is.** A routed prompt carries a hidden note naming the model that
   answers it, since the system prompt names the model the session started on.
-- **`/router`** opens a pane with two tabs:
+- **Design and artifact checks go to Opus.** Prompts about designs, artifacts, mockups, Figma,
+  UX, visuals or CSS are hard work; system design ("how should we design…", "redesign") is planning.
+- **`/router`** opens a pane with three tabs:
   - **Overview**: what the current turn runs on and why, a **Use** picker (Auto or one model
     to pin), context use, and each task's model and effort.
   - **Models**: a model and an effort dropdown for each task in the active setup, and a setup
     picker when you have more than one. Changes save to `setups.json` right away.
+  - **Usage**: each model's share of this session as a bar, with its tokens (fresh, cached,
+    written, output) and requests, subagents included; context use; your plan's 5-hour and weekly
+    limits with when they reset; and the session's cost estimate.
 
 ## Install
 
@@ -157,7 +163,8 @@ mod ignores it and always uses the folder under your home.
   that does not parse is copied to `setups.json.bak-<time>` before it is replaced (never through a
 symlink, and never over an older backup). Setup names use letters, digits, `-`, `_` and `.`
 (up to 40); other names in the file are ignored.
-- `rules.json` (optional): your own keyword rules. Without it the built-in rules are used.
+- `rules.json` (optional): your own keyword rules, added to the built-in ones. The built-in
+  rules always apply, so a file from an older version never hides rules added since.
 
 To customize the rules, run `claude-model-router rules`. It writes the built-in rules to
 `rules.json` (it never overwrites one that exists) and prints the path. The file maps each role

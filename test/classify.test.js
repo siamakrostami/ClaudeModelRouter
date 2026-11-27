@@ -445,3 +445,17 @@ test('heavy signals stay conservative', () => {
   assert.notEqual(role('run the end to end tests'), 'plan');
   assert.notEqual(role('the design is fine, implement it'), 'plan');
 });
+
+for (const [p, role] of [
+  ['check the artifacts and design', 'hard'],
+  ['is the design good?', 'hard'],
+  ['look at the mockup and tell me what is off', 'hard'],
+  ['check the figma design', 'hard'],
+  ['how should we design the sync layer', 'plan'],
+  ['write a design doc for sync', 'plan'],
+  ['redesign onboarding', 'plan'],
+]) {
+  test(`design: "${p}" → ${role}`, () => {
+    assert.equal(classify(p, DEFAULT_RULES, DEFAULT_SETUP).role, role)
+  })
+}
